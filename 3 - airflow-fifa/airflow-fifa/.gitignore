@@ -1,0 +1,13 @@
+.env
+
+# airflow_settings.yaml normalmente se ignora porque ahí van credenciales.
+# El nuestro sólo declara la URL de la PokéAPI, que es pública, así que se
+# versiona para que la conexión exista al primer `astro dev start`.
+# Cuando tu proyecto necesite una API key, sacala de acá.
+logs/
+include/output/
+__pycache__/
+*.pyc
+
+# El respaldo fresco se regenera solo; la semilla (fifa_snapshot.csv) sí se versiona.
+include/frozen/ultimo_ok.csv

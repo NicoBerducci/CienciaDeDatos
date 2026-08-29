@@ -1,0 +1,5 @@
+beautifulsoup4>=4.13
+lxml>=6.0
+pandas>=2.2
+playwright>=1.55
+apache-airflow-providers-http>=6.0

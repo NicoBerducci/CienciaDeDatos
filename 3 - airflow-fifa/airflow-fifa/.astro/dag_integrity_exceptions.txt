@@ -1,0 +1,1 @@
+# Archivos que `astro dev parse` debe ignorar. Uno por línea.
