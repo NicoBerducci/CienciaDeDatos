@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import time
+import random
 from collections import Counter
 from datetime import timedelta, datetime as std_datetime
 from pathlib import Path
@@ -241,7 +242,7 @@ def bo3_cs2_ingest():
     def dates_to_download(plan: dict[str, Any]) -> list[str]:
         return plan["dates"]
 
-    @task(max_active_tis_per_dag=1)
+    @task(max_active_tis_per_dag=4)
     def land_bronze(date_str: str, plan: dict[str, Any]) -> dict[str, Any]:
         response = request_date(date_str)
         data = response.json()
@@ -260,9 +261,9 @@ def bo3_cs2_ingest():
         for match in matches:
             match_slug = match.get("slug") or match.get("id")
             if match_slug:
-                time.sleep(1)  # Protección Cloudflare
-                stats = request_secondary(f"https://api.bo3.gg/api/v1/matches/{match_slug}/short_players_stats")
-                match["short_players_stats"] = stats
+                time.sleep(random.uniform(1, 4))  # Protección Cloudflare
+                stats = request_secondary(f"https://api.bo3.gg/api/v1/matches/{match_slug}/players_stats")
+                match["players_stats"] = stats
             enriched_matches.append(match)
             
         if isinstance(data, dict):
@@ -365,7 +366,7 @@ def bo3_cs2_ingest():
                     continue
                 if match.get("status") != "finished":
                     continue
-                if not match.get("short_players_stats"):
+                if not match.get("players_stats"):
                     continue
                     
                 match_id = match.get("id")
@@ -388,34 +389,67 @@ def bo3_cs2_ingest():
                 games = match.get("games", [])
                 map_names = [g.get("map_name") for g in games if g.get("map_name")]
                 
-                # Extraer jugadores sin cálculos históricos
-                stats_data = match.get("short_players_stats", [])
+                # Extraer jugadores usando players_stats
+                stats_data = match.get("players_stats", [])
                 if isinstance(stats_data, list):
                     for p in stats_data:
-                        t_id = p.get("team_id")
-                        p_id = p.get("player_id")
+                        team_clan = p.get("team_clan", {}) or {}
+                        steam_profile = p.get("steam_profile", {}) or {}
+                        
+                        t_id = team_clan.get("team_id")
+                        p_id = steam_profile.get("player_id")
                         if not t_id or not p_id:
                             continue
                         
-                        game_ids = p.get("game_ids")
-                        game_ids_str = ",".join(map(str, game_ids)) if isinstance(game_ids, list) else ""
+                        game_profiles = steam_profile.get("game_steam_profiles", [])
+                        game_ids = [gp.get("game_id") for gp in game_profiles if gp.get("game_id")]
+                        game_ids_str = ",".join(map(str, game_ids)) if game_ids else ""
+                        games_count = len(game_profiles)
 
-                        player_rows.append({
+                        player_dict = steam_profile.get("player", {}) or {}
+                        team_dict = team_clan.get("team", {}) or {}
+
+                        row_dict = {
                             "match_id": match_id,
                             "team_id": t_id,
                             "player_id": p_id,
                             "game_ids": game_ids_str,
-                            "games_count": p.get("games_count"),
-                            "adr_sum": p.get("adr_sum"),
-                            "kills_sum": p.get("kills_sum"),
-                            "deaths_sum": p.get("deaths_sum"),
-                            "assists_sum": p.get("assists_sum"),
-                            "flash_assists_sum": p.get("flash_assists_sum"),
-                            "headshots_sum": p.get("headshots_sum"),
+                            "games_count": games_count,
+                            "adr": p.get("adr"),
+                            "kills": p.get("kills"),
+                            "death": p.get("death"),
+                            "assists": p.get("assists"),
+                            "headshots": p.get("headshots"),
+                            "first_kills": p.get("first_kills"),
+                            "first_death": p.get("first_death"),
+                            "trade_kills": p.get("trade_kills"),
+                            "trade_death": p.get("trade_death"),
+                            "kast": p.get("kast"),
+                            "player_rating": p.get("player_rating"),
+                            "hits": p.get("hits"),
+                            "shots": p.get("shots"),
+                            "got_damage": p.get("got_damage"),
+                            "damage": p.get("damage"),
+                            "utility_value": p.get("utility_value"),
+                            "money_spent": p.get("money_spent"),
+                            "money_save": p.get("money_save"),
+                            "clutches": p.get("clutches"),
+                            "total_equipment_value": p.get("total_equipment_value"),
+                            "additional_value": p.get("additional_value"),
+                            "pistols_value": p.get("pistols_value"),
+                            "weapons_value": p.get("weapons_value"),
+                            "player_rating_value": p.get("player_rating_value"),
                             "clan_name": p.get("clan_name"),
-                            "team_name": p.get("team"),
-                            "player_name": p.get("player"),
-                        })
+                            "team_name": team_dict,
+                            "player_name": player_dict,
+                        }
+                        
+                        multikills = p.get("multikills") or {}
+                        if isinstance(multikills, dict):
+                            for k, v in multikills.items():
+                                row_dict[f"multikills_{k}"] = v
+                        
+                        player_rows.append(row_dict)
                 
                 rows.append({
                     "match_id": match_id,
