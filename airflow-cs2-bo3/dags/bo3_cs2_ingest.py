@@ -26,7 +26,7 @@ from pendulum import datetime, now
 
 API_URL = "https://api.bo3.gg/api/v2/matches/finished"
 MIN_DATE = "2024-01-01"
-REQUEST_TIMEOUT_SECONDS = 45
+REQUEST_TIMEOUT_SECONDS = 1
 MAX_HTTP_ATTEMPTS = 4
 
 OUTPUT_DIR = Path("/usr/local/airflow/include/output")
@@ -39,7 +39,6 @@ QUALITY_DIR = OUTPUT_DIR / "quality"
 SILVER_DIR = OUTPUT_DIR / "silver"
 
 REQUEST_PARAMS = {
-    "filter[tier][in]": "s,a",
     "filter[discipline_id][eq]": "1",
     "utc_offset": "0",
 }
@@ -161,7 +160,7 @@ def request_secondary(endpoint: str) -> dict:
     schedule="0 0 * * *",
     catchup=False,
     max_active_runs=1,
-    max_active_tasks=1,  # Limitado para no saturar la API oculta de bo3.gg
+    max_active_tasks=4,  # Limitado para no saturar la API oculta de bo3.gg
     default_args={
         "owner": "grupo_5K10_07",
         "retries": 2,
@@ -261,7 +260,7 @@ def bo3_cs2_ingest():
         for match in matches:
             match_slug = match.get("slug") or match.get("id")
             if match_slug:
-                time.sleep(2)  # Protección Cloudflare
+                time.sleep(1)  # Protección Cloudflare
                 stats = request_secondary(f"https://api.bo3.gg/api/v1/matches/{match_slug}/short_players_stats")
                 match["short_players_stats"] = stats
             enriched_matches.append(match)
@@ -389,7 +388,7 @@ def bo3_cs2_ingest():
                 games = match.get("games", [])
                 map_names = [g.get("map_name") for g in games if g.get("map_name")]
                 
-                # Extraer jugadores
+                # Extraer jugadores sin cálculos históricos
                 stats_data = match.get("short_players_stats", [])
                 if isinstance(stats_data, list):
                     for p in stats_data:
@@ -397,14 +396,25 @@ def bo3_cs2_ingest():
                         p_id = p.get("player_id")
                         if not t_id or not p_id:
                             continue
+                        
+                        game_ids = p.get("game_ids")
+                        game_ids_str = ",".join(map(str, game_ids)) if isinstance(game_ids, list) else ""
+
                         player_rows.append({
                             "match_id": match_id,
-                            "begin_at": begin_at,
                             "team_id": t_id,
                             "player_id": p_id,
-                            "kills": p.get("kills_sum") or 0,
-                            "deaths": p.get("deaths_sum") or 0,
-                            "assists": p.get("assists_sum") or 0,
+                            "game_ids": game_ids_str,
+                            "games_count": p.get("games_count"),
+                            "adr_sum": p.get("adr_sum"),
+                            "kills_sum": p.get("kills_sum"),
+                            "deaths_sum": p.get("deaths_sum"),
+                            "assists_sum": p.get("assists_sum"),
+                            "flash_assists_sum": p.get("flash_assists_sum"),
+                            "headshots_sum": p.get("headshots_sum"),
+                            "clan_name": p.get("clan_name"),
+                            "team_name": p.get("team"),
+                            "player_name": p.get("player"),
                         })
                 
                 rows.append({
@@ -427,133 +437,31 @@ def bo3_cs2_ingest():
         df = pd.DataFrame(rows)
         df["begin_at"] = pd.to_datetime(df["begin_at"], utc=True)
         df.sort_values(by="begin_at", ascending=True, inplace=True)
+        df = df.drop_duplicates(subset=["match_id"])
         
-        # ---------------------------------------------------------
-        # 1. GENERAR TEAM_DF (Aplanar equipos)
-        # ---------------------------------------------------------
-        team_a_df = df[["match_id", "begin_at", "team_a_id", "team_b_id", "winner_id", "bo_type", "tier", "stars", "map_names"]].copy()
-        team_a_df.columns = ["match_id", "begin_at", "team_id", "opponent_id", "winner_id", "bo_type", "tier", "stars", "map_names"]
-        
-        team_b_df = df[["match_id", "begin_at", "team_b_id", "team_a_id", "winner_id", "bo_type", "tier", "stars", "map_names"]].copy()
-        team_b_df.columns = ["match_id", "begin_at", "team_id", "opponent_id", "winner_id", "bo_type", "tier", "stars", "map_names"]
-        
-        teams_df = pd.concat([team_a_df, team_b_df]).sort_values(by="begin_at", ascending=True)
-        teams_df["team_won"] = (teams_df["team_id"] == teams_df["winner_id"]).astype(int)
-        
-        # ---------------------------------------------------------
-        # 2. CALCULAR WINRATES GLOBALES Y RACHAS
-        # ---------------------------------------------------------
-        teams_df["global_winrate_10"] = teams_df.groupby("team_id")["team_won"].transform(lambda x: x.rolling(10, min_periods=1).mean().shift(1)).fillna(0.5)
-        teams_df["h2h_winrate"] = teams_df.groupby(["team_id", "opponent_id"])["team_won"].transform(lambda x: x.expanding().mean().shift(1)).fillna(0.5)
-        
-        def calc_streak(s):
-            streaks = []
-            current = 0
-            for won in s:
-                streaks.append(current)
-                if won == 1:
-                    current = current + 1 if current > 0 else 1
-                else:
-                    current = current - 1 if current < 0 else -1
-            return streaks
-        teams_df["win_streak"] = teams_df.groupby("team_id")["team_won"].transform(calc_streak)
-        
-        # ---------------------------------------------------------
-        # 3. WINRATES POR CONTEXTO (bo_type, tier)
-        # ---------------------------------------------------------
-        # BO_TYPE
-        bo_history = teams_df[["team_id", "match_id", "begin_at", "bo_type", "team_won"]].copy()
-        bo_history["bo_winrate"] = bo_history.groupby(["team_id", "bo_type"])["team_won"].transform(lambda x: x.expanding().mean().shift(1)).fillna(0.5)
-        bo_pivoted = bo_history.pivot_table(index=["team_id", "match_id", "begin_at"], columns="bo_type", values="bo_winrate").reset_index()
-        bo_pivoted.columns = ["team_id", "match_id", "begin_at"] + [f"winrate_bo{int(c)}" for c in bo_pivoted.columns if isinstance(c, (int, float))]
-        bo_cols = [c for c in bo_pivoted.columns if c.startswith("winrate_bo")]
-        bo_pivoted.sort_values(["team_id", "begin_at"], inplace=True)
-        bo_pivoted[bo_cols] = bo_pivoted.groupby("team_id")[bo_cols].ffill().fillna(0.5)
-        teams_df = teams_df.merge(bo_pivoted, on=["team_id", "match_id", "begin_at"], how="left")
-        
-        # TIER
-        tier_history = teams_df[["team_id", "match_id", "begin_at", "tier", "team_won"]].copy()
-        tier_history["tier"] = tier_history["tier"].fillna("unknown")
-        tier_history["tier_winrate"] = tier_history.groupby(["team_id", "tier"])["team_won"].transform(lambda x: x.expanding().mean().shift(1)).fillna(0.5)
-        tier_pivoted = tier_history.pivot_table(index=["team_id", "match_id", "begin_at"], columns="tier", values="tier_winrate").reset_index()
-        tier_pivoted.columns = ["team_id", "match_id", "begin_at"] + [f"winrate_tier_{str(c).lower()}" for c in tier_pivoted.columns if c not in ["team_id", "match_id", "begin_at"]]
-        tier_cols = [c for c in tier_pivoted.columns if c.startswith("winrate_tier_")]
-        tier_pivoted.sort_values(["team_id", "begin_at"], inplace=True)
-        tier_pivoted[tier_cols] = tier_pivoted.groupby("team_id")[tier_cols].ffill().fillna(0.5)
-        teams_df = teams_df.merge(tier_pivoted, on=["team_id", "match_id", "begin_at"], how="left")
-
-        # ---------------------------------------------------------
-        # 4. MAP POOL (Winrates historicos en todos los mapas)
-        # ---------------------------------------------------------
-        maps_exploded = teams_df[["team_id", "match_id", "begin_at", "team_won", "map_names"]].copy()
-        maps_exploded = maps_exploded.explode("map_names").dropna(subset=["map_names"])
-        # Asumimos que si gano el partido, gano el mapa (aproximacion)
-        maps_exploded["map_winrate"] = maps_exploded.groupby(["team_id", "map_names"])["team_won"].transform(lambda x: x.expanding().mean().shift(1)).fillna(0.5)
-        map_pivoted = maps_exploded.pivot_table(index=["team_id", "match_id", "begin_at"], columns="map_names", values="map_winrate").reset_index()
-        map_pivoted.columns = ["team_id", "match_id", "begin_at"] + [f"winrate_map_{c}" for c in map_pivoted.columns if c not in ["team_id", "match_id", "begin_at"]]
-        
-        all_team_matches = teams_df[["team_id", "match_id", "begin_at"]].drop_duplicates()
-        team_map_history = pd.merge(all_team_matches, map_pivoted, on=["team_id", "match_id", "begin_at"], how="left")
-        team_map_history.sort_values(["team_id", "begin_at"], inplace=True)
-        map_cols = [c for c in team_map_history.columns if c.startswith("winrate_map_")]
-        team_map_history[map_cols] = team_map_history.groupby("team_id")[map_cols].ffill().fillna(0.5)
-        teams_df = teams_df.merge(team_map_history, on=["team_id", "match_id", "begin_at"], how="left")
-
-        # ---------------------------------------------------------
-        # 5. ESTADISTICAS DE JUGADORES (Ordenados por rendimiento)
-        # ---------------------------------------------------------
         if player_rows:
             players_df = pd.DataFrame(player_rows)
-            players_df["begin_at"] = pd.to_datetime(players_df["begin_at"], utc=True)
-            players_df.sort_values("begin_at", inplace=True)
-            
-            # Promedios ultimos 5 partidos
-            players_df["p_kills_5"] = players_df.groupby("player_id")["kills"].transform(lambda x: x.rolling(5, min_periods=1).mean().shift(1)).fillna(0)
-            players_df["p_deaths_5"] = players_df.groupby("player_id")["deaths"].transform(lambda x: x.rolling(5, min_periods=1).mean().shift(1)).fillna(0)
-            players_df["p_assists_5"] = players_df.groupby("player_id")["assists"].transform(lambda x: x.rolling(5, min_periods=1).mean().shift(1)).fillna(0)
-            
-            # Ordenar para asignar Rank (Player 1 = mas kills_5)
-            players_df.sort_values(["match_id", "team_id", "p_kills_5"], ascending=[True, True, False], inplace=True)
+            # Ordenamos por player_id para darles un "rank" 1 al 5 determinista sin data leakage
+            players_df.sort_values(["match_id", "team_id", "player_id"], inplace=True)
             players_df["rank"] = players_df.groupby(["match_id", "team_id"]).cumcount() + 1
-            players_df = players_df[players_df["rank"] <= 5]
             
-            p_pivot = players_df.pivot_table(index=["match_id", "team_id"], columns="rank", values=["p_kills_5", "p_deaths_5", "p_assists_5"]).reset_index()
-            # Aplanar nombres
-            p_pivot.columns = ["match_id", "team_id"] + [f"player_{col[1]}_{col[0].replace('p_', '')}" for col in p_pivot.columns if col[0] not in ["match_id", "team_id"]]
-            p_cols = [c for c in p_pivot.columns if c.startswith("player_")]
-            p_pivot[p_cols] = p_pivot[p_cols].fillna(0)
+            players_df = players_df.set_index(["match_id", "team_id", "rank"])
+            p_unstacked = players_df.unstack("rank")
+            p_unstacked.columns = [f"p{rank}_{col}" for col, rank in p_unstacked.columns]
+            p_pivot = p_unstacked.reset_index()
             
-            teams_df = teams_df.merge(p_pivot, on=["match_id", "team_id"], how="left")
-            teams_df[p_cols] = teams_df[p_cols].fillna(0)
-
-        # ---------------------------------------------------------
-        # 6. UNIR TODO Y LIMPIAR
-        # ---------------------------------------------------------
-        team_a_features = teams_df.add_prefix("team_a_")
-        team_a_features = team_a_features.rename(columns={"team_a_match_id": "match_id", "team_a_team_id": "team_a_id"})
-        team_a_features = team_a_features.drop_duplicates(subset=["match_id", "team_a_id"])
-        
-        team_b_features = teams_df.add_prefix("team_b_")
-        team_b_features = team_b_features.rename(columns={"team_b_match_id": "match_id", "team_b_team_id": "team_b_id"})
-        team_b_features = team_b_features.drop_duplicates(subset=["match_id", "team_b_id"])
-        
-        df = df.merge(team_a_features, on=["match_id", "team_a_id"], how="left")
-        df = df.merge(team_b_features, on=["match_id", "team_b_id"], how="left")
-        
-        df["target_team_a_won"] = (df["team_a_id"] == df["winner_id"]).astype(int)
-        
-        cols_to_drop = [
-            "team_a_begin_at", "team_b_begin_at", "team_a_opponent_id", "team_b_opponent_id", 
-            "team_a_winner_id", "team_b_winner_id", "team_a_map_names", "team_b_map_names", 
-            "map_names", "team_a_team_won", "team_b_team_won", 
-            "bo_type", "tier", "stars", 
-            "team_a_bo_type", "team_a_tier", "team_a_stars", 
-            "team_b_bo_type", "team_b_tier", "team_b_stars"
-        ]
-        df = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors="ignore")
-        
-        df = df.fillna(0)
-
+            p_pivot_a = p_pivot.copy()
+            p_pivot_a = p_pivot_a.rename(columns={"team_id": "team_a_id"})
+            p_pivot_a = p_pivot_a.add_prefix("team_a_")
+            p_pivot_a = p_pivot_a.rename(columns={"team_a_match_id": "match_id", "team_a_team_a_id": "team_a_id"})
+            
+            p_pivot_b = p_pivot.copy()
+            p_pivot_b = p_pivot_b.rename(columns={"team_id": "team_b_id"})
+            p_pivot_b = p_pivot_b.add_prefix("team_b_")
+            p_pivot_b = p_pivot_b.rename(columns={"team_b_match_id": "match_id", "team_b_team_b_id": "team_b_id"})
+            
+            df = df.merge(p_pivot_a, on=["match_id", "team_a_id"], how="left")
+            df = df.merge(p_pivot_b, on=["match_id", "team_b_id"], how="left")
         extraction_id = state["last_successful_extraction"]
         candidate_directory = STAGING_DIR / f"extraction={extraction_id}"
         candidate_directory.mkdir(parents=True, exist_ok=True)
