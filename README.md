@@ -1,7 +1,31 @@
 Overview
 ========
 
-Welcome to Astronomer! This project was generated after you ran 'astro dev init' using the Astronomer CLI. This readme describes the contents of the project, as well as how to run Apache Airflow on your local machine.
+Este proyecto ingiere partidos de Counter-Strike 2 desde Bo3.gg con Airflow.
+
+Pipeline de datos
+=================
+
+- `include/output/bronze`: respuestas originales append-only de partidos y rankings.
+- `include/output/intermediate/match_facts_latest.csv`: tabla de apoyo con el resultado observado, campos `post_*`, estados y validez por familia.
+- `include/output/silver/matches_latest.csv`: dataset analítico point-in-time. Conserva contexto y target, pero sólo contiene predictores que estaban disponibles antes de comenzar cada partido.
+
+La primera ejecución posterior a la migración reutiliza `bronze_index.json` y los
+payloads ya descargados. No vuelve a consultar todos los partidos: descubre sólo
+las fechas posteriores a `pipeline_state.json`, procesa los reintentos pendientes
+y descarga los snapshots oficiales de ranking todavía ausentes. La reconstrucción
+de Intermediate y Silver sí recorre localmente todo Bronze para que las features
+históricas queden consistentes ante backfills y correcciones.
+
+Los rankings se vinculan por `team_id` usando el último snapshot oficial cuya
+fecha sea estrictamente anterior al día del partido. Un equipo ausente del
+snapshot queda con ranking nulo; no se le asigna el peor puesto ni se cruza por
+nombre.
+
+Una observación parcial puede alimentar las familias para las que tiene datos
+válidos. Por ejemplo, un resultado válido alimenta winrate/Elo aunque falten las
+estadísticas de jugadores. Las ventanas toman los últimos N partidos reales y no
+buscan encuentros más antiguos para reemplazar mediciones ausentes.
 
 Project Contents
 ================

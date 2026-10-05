@@ -1,13 +1,13 @@
-"""Ingesta diaria de partidos de Counter-Strike 2 desde Bo3.gg.
+"""Ingesta incremental y features point-in-time de CS2 desde Bo3.gg.
 
-El DAG implementa dos capas:
+Capas publicadas:
 
-* Bronze append-only: conserva por separado la respuesta de cada endpoint.
-* Silver canónico: un partido competitivo finalizado por fila.
+* Bronze append-only: respuestas originales de partidos y rankings.
+* Intermediate: hechos observados por partido, estados y validez por familia.
+* Silver analitico: una fila predictiva por partido con estadisticas historicas.
 
-Silver contiene observaciones del partido. Las variables históricas para el
-modelo (winrates, rachas, forma, H2H, etc.) pertenecen a Gold y deliberadamente
-no se calculan aquí.
+El Silver se calcula siempre antes de incorporar el resultado del partido
+actual. Las columnas ``post_*`` existen solo en Intermediate.
 """
 
 from __future__ import annotations
@@ -32,9 +32,19 @@ import requests
 from airflow.sdk import dag, get_current_context, task
 from pendulum import datetime
 
+from bo3_cs2_features import (
+    SILVER_COLUMNS,
+    attach_historical_rankings,
+    build_point_in_time_silver,
+    normalize_ranking_payloads,
+    parse_official_ranking_dates,
+)
+
 
 BASE_URL = "https://api.bo3.gg/api"
 DISCOVERY_URL = f"{BASE_URL}/v1/matches"
+RANKINGS_URL = f"{BASE_URL}/v2/team_rankings"
+RANKING_DATES_URL = f"{BASE_URL}/v2/filters/team_rankings/official_dates"
 CS2_DISCIPLINE_ID = 1
 CS2_START_DATE = py_date(2023, 9, 27)
 
@@ -50,6 +60,7 @@ MIN_SILVER_ROWS = 1_000
 RECENT_RETRY_OFFSETS_DAYS = (1, 3, 7)
 CONTROL_IO_WORKERS = 8
 CONTROL_LOG_EVERY_BATCHES = 10
+RANKING_PAGE_SIZE = 500
 
 OUTPUT_DIR = Path("/usr/local/airflow/include/output")
 BRONZE_DIR = OUTPUT_DIR / "bronze"
@@ -58,8 +69,10 @@ CONTROL_DIR = OUTPUT_DIR / "control"
 STATE_PATH = CONTROL_DIR / "pipeline_state.json"
 REGISTRY_PATH = CONTROL_DIR / "match_registry.json"
 BRONZE_INDEX_PATH = CONTROL_DIR / "bronze_index.json"
+RANKING_INDEX_PATH = CONTROL_DIR / "ranking_index.json"
 STAGING_DIR = OUTPUT_DIR / "staging"
 QUALITY_DIR = OUTPUT_DIR / "quality"
+INTERMEDIATE_DIR = OUTPUT_DIR / "intermediate"
 SILVER_DIR = OUTPUT_DIR / "silver"
 
 LOGGER = logging.getLogger(__name__)
@@ -337,8 +350,13 @@ def assess_enrichment(
 ) -> dict[str, Any]:
     issues: list[str] = []
     valid_result = match_result_valid(detail)
+    start_at = parse_datetime(detail.get("start_date") or detail.get("begin_at"))
+    end_at = parse_datetime(detail.get("end_date") or detail.get("end_at"))
+    end_time_valid = bool(start_at and end_at and end_at >= start_at)
     if not valid_result:
         issues.append("invalid_or_non_competitive_result")
+    if not end_time_valid:
+        issues.append("invalid_or_missing_end_time")
 
     complete_games = 0
     rounds_reported = 0
@@ -366,6 +384,7 @@ def assess_enrichment(
     if not profiles:
         issues.append("historical_lineup_missing")
 
+    maps_complete = bool(games) and complete_games == len(games)
     rounds_complete = rounds_reported > 0 and rounds_reported == rounds_received
     if valid_result and games and complete_games == len(games) and full_stats and profiles and rounds_complete:
         completeness = "complete"
@@ -378,6 +397,9 @@ def assess_enrichment(
 
     return {
         "result_valid": valid_result,
+        "end_time_valid": end_time_valid,
+        "maps_complete": maps_complete,
+        "rounds_complete": rounds_complete,
         "data_completeness": completeness,
         "games_count": len(games),
         "complete_games_count": complete_games,
@@ -436,13 +458,14 @@ def safe_mean(values: Iterable[Any]) -> float | None:
     return sum(numeric) / len(numeric) if numeric else None
 
 
-def build_silver_columns() -> list[str]:
+def build_match_fact_columns() -> list[str]:
     columns = [
         "match_id", "match_slug", "start_at_utc", "end_at_utc", "duration_seconds",
         "bo_type", "tier", "game_version", "tournament_id", "tournament_name",
         "stage_id", "stage_name", "team_a_id", "team_a_name", "team_a_country_code",
-        "team_b_id", "team_b_name", "team_b_country_code", "team_a_rank_at_extraction",
-        "team_b_rank_at_extraction", "rank_extracted_at_utc", "winner_team_id",
+        "team_b_id", "team_b_name", "team_b_country_code",
+        "source_team_a_rank_at_extraction", "source_team_b_rank_at_extraction",
+        "source_rank_extracted_at_utc", "winner_team_id",
         "loser_team_id", "target_team_a_won", "post_team_a_maps_won",
         "post_team_b_maps_won", "post_maps_played",
     ]
@@ -468,12 +491,27 @@ def build_silver_columns() -> list[str]:
         ])
     columns.extend([
         "team_a_lineup_profile_ids", "team_b_lineup_profile_ids", "team_a_lineup_size",
-        "team_b_lineup_size", "parsed_status", "data_completeness",
+        "team_b_lineup_size", "source_status", "parsed_status", "data_completeness",
+        "lifecycle_state", "result_valid", "end_time_valid", "maps_valid",
+        "round_scores_valid", "round_details_complete",
+    ])
+    for side in ("a", "b"):
+        columns.extend([
+            f"team_{side}_player_stats_valid", f"team_{side}_rating_valid",
+            f"team_{side}_adr_valid", f"team_{side}_kast_valid",
+            f"team_{side}_mechanical_totals_valid",
+            f"team_{side}_mechanical_stats_source", f"team_{side}_lineup_valid",
+        ])
+    columns.extend([
+        "team_a_rank", "team_b_rank", "team_a_ranking_score", "team_b_ranking_score",
+        "ranking_snapshot_date", "ranking_age_days", "ranking_is_official",
+        "ranking_source", "ranking_source_updated_at", "quality_issues",
+        "normalization_issues",
     ])
     return columns
 
 
-SILVER_COLUMNS = build_silver_columns()
+MATCH_FACT_COLUMNS = build_match_fact_columns()
 
 
 def build_match_row(
@@ -486,7 +524,7 @@ def build_match_row(
     data_completeness: str,
     rank_extracted_at_utc: str | None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    """Construye una fila por partido sin calcular información histórica."""
+    """Construye el hecho observado y explicita la validez de cada familia."""
 
     issues: list[str] = []
     if not match_result_valid(detail):
@@ -513,7 +551,7 @@ def build_match_row(
 
     tournament = detail.get("tournament") or detail.get("tournament_deep") or {}
     stage = detail.get("stage") or {}
-    row = {column: None for column in SILVER_COLUMNS}
+    row = {column: None for column in MATCH_FACT_COLUMNS}
     row.update({
         "match_id": int(detail["id"]), "match_slug": detail.get("slug"),
         "start_at_utc": iso_utc(start_at) if start_at else None,
@@ -526,10 +564,13 @@ def build_match_row(
         "team_a_id": team_a_id, "team_a_name": team_a.get("name"),
         "team_a_country_code": (team_a.get("country") or {}).get("code"), "team_b_id": team_b_id,
         "team_b_name": team_b.get("name"), "team_b_country_code": (team_b.get("country") or {}).get("code"),
-        "team_a_rank_at_extraction": team_a.get("rank"), "team_b_rank_at_extraction": team_b.get("rank"),
-        "rank_extracted_at_utc": rank_extracted_at_utc, "winner_team_id": winner_id,
+        "source_team_a_rank_at_extraction": team_a.get("rank"),
+        "source_team_b_rank_at_extraction": team_b.get("rank"),
+        "source_rank_extracted_at_utc": rank_extracted_at_utc, "winner_team_id": winner_id,
         "loser_team_id": loser_id, "target_team_a_won": int(winner_id == team_a_id),
-        "parsed_status": detail.get("parsed_status"), "data_completeness": data_completeness,
+        "source_status": detail.get("status"), "parsed_status": detail.get("parsed_status"),
+        "data_completeness": data_completeness, "result_valid": True,
+        "end_time_valid": bool(start_at and end_at and end_at >= start_at),
     })
 
     ordered_games = sorted(games, key=lambda game: (
@@ -541,6 +582,10 @@ def build_match_row(
     side_rounds = {team_a_id: {"CT": 0, "T": 0, "OT": 0}, team_b_id: {"CT": 0, "T": 0, "OT": 0}}
     round_totals: dict[int, dict[str, float]] = {team_a_id: defaultdict(float), team_b_id: defaultdict(float)}
     round_stat_rows = Counter({team_a_id: 0, team_b_id: 0})
+    round_field_rows: dict[int, Counter[str]] = {team_a_id: Counter(), team_b_id: Counter()}
+    expected_rounds = 0
+    received_rounds = 0
+    valid_games = 0
 
     for slot, game in enumerate(ordered_games[:MAX_GAMES_PER_MATCH], start=1):
         winner_clan = game.get("winner_team_clan") or {}
@@ -559,6 +604,16 @@ def build_match_row(
         loser_score = game.get("loser_clan_score")
         score_a = winner_score if game_winner == team_a_id else loser_score if game_loser == team_a_id else None
         score_b = winner_score if game_winner == team_b_id else loser_score if game_loser == team_b_id else None
+        game_valid = bool(
+            game.get("map_name") and game_winner in {team_a_id, team_b_id}
+            and game_loser in {team_a_id, team_b_id} and game_winner != game_loser
+            and score_a is not None and score_b is not None
+        )
+        valid_games += int(game_valid)
+        reported_rounds = game.get("rounds_count")
+        if reported_rounds is not None:
+            expected_rounds += int(reported_rounds)
+        received_rounds += len(game.get("game_rounds") or [])
         overtime = any(bool(segment.get("overtime")) for segment in game.get("game_side_results") or [])
         row.update({
             f"post_map_{slot}_game_id": game.get("id"), f"post_map_{slot}_name": game.get("map_name"),
@@ -601,30 +656,36 @@ def build_match_row(
                     value = team_round.get(source_name)
                     if value is not None:
                         round_totals[round_team][output_name] += float(value)
+                        round_field_rows[round_team][output_name] += 1
 
     if len(ordered_games) > MAX_GAMES_PER_MATCH:
         issues.append("more_than_five_games")
 
+    maps_valid = bool(ordered_games) and valid_games == len(ordered_games)
+    round_scores_valid = maps_valid
+    round_details_complete = bool(
+        expected_rounds > 0 and received_rounds == expected_rounds
+        and round_stat_rows[team_a_id] == expected_rounds
+        and round_stat_rows[team_b_id] == expected_rounds
+    )
     row.update({
-        "post_team_a_maps_won": maps_won[team_a_id], "post_team_b_maps_won": maps_won[team_b_id],
-        "post_maps_played": len(ordered_games),
-        "post_team_a_rounds_won": rounds_won[team_a_id] if ordered_games else None,
-        "post_team_b_rounds_won": rounds_won[team_b_id] if ordered_games else None,
-        "post_round_difference_a": rounds_won[team_a_id] - rounds_won[team_b_id] if ordered_games else None,
-        "post_total_rounds": rounds_won[team_a_id] + rounds_won[team_b_id] if ordered_games else None,
-        "post_team_a_ct_rounds_won": side_rounds[team_a_id]["CT"] if ordered_games else None,
-        "post_team_a_t_rounds_won": side_rounds[team_a_id]["T"] if ordered_games else None,
-        "post_team_b_ct_rounds_won": side_rounds[team_b_id]["CT"] if ordered_games else None,
-        "post_team_b_t_rounds_won": side_rounds[team_b_id]["T"] if ordered_games else None,
-        "post_team_a_overtime_rounds_won": side_rounds[team_a_id]["OT"] if ordered_games else None,
-        "post_team_b_overtime_rounds_won": side_rounds[team_b_id]["OT"] if ordered_games else None,
+        "maps_valid": maps_valid,
+        "round_scores_valid": round_scores_valid,
+        "round_details_complete": round_details_complete,
+        "post_team_a_maps_won": maps_won[team_a_id] if maps_valid else None,
+        "post_team_b_maps_won": maps_won[team_b_id] if maps_valid else None,
+        "post_maps_played": len(ordered_games) if maps_valid else None,
+        "post_team_a_rounds_won": rounds_won[team_a_id] if round_scores_valid else None,
+        "post_team_b_rounds_won": rounds_won[team_b_id] if round_scores_valid else None,
+        "post_round_difference_a": rounds_won[team_a_id] - rounds_won[team_b_id] if round_scores_valid else None,
+        "post_total_rounds": rounds_won[team_a_id] + rounds_won[team_b_id] if round_scores_valid else None,
+        "post_team_a_ct_rounds_won": side_rounds[team_a_id]["CT"] if round_details_complete else None,
+        "post_team_a_t_rounds_won": side_rounds[team_a_id]["T"] if round_details_complete else None,
+        "post_team_b_ct_rounds_won": side_rounds[team_b_id]["CT"] if round_details_complete else None,
+        "post_team_b_t_rounds_won": side_rounds[team_b_id]["T"] if round_details_complete else None,
+        "post_team_a_overtime_rounds_won": side_rounds[team_a_id]["OT"] if round_details_complete else None,
+        "post_team_b_overtime_rounds_won": side_rounds[team_b_id]["OT"] if round_details_complete else None,
     })
-    for side, team_id in (("a", team_a_id), ("b", team_b_id)):
-        for output_name in ROUND_STAT_FIELDS.values():
-            value = round_totals[team_id].get(output_name)
-            row[f"post_team_{side}_{output_name}"] = (
-                int(value) if value is not None and float(value).is_integer() else value
-            ) if round_stat_rows[team_id] else None
 
     profile_team_votes: dict[int, set[int]] = defaultdict(set)
     lineup_ids: dict[int, set[int]] = {team_a_id: set(), team_b_id: set()}
@@ -679,65 +740,98 @@ def build_match_row(
 
     for side, team_id in (("a", team_a_id), ("b", team_b_id)):
         player_rows = list(player_rows_by_team[team_id].values())
-        row[f"post_team_{side}_player_rating_mean"] = safe_mean(stat.get("player_rating") for stat in player_rows)
-        row[f"post_team_{side}_adr_mean"] = safe_mean(stat.get("adr") for stat in player_rows)
-        row[f"post_team_{side}_kast_mean"] = safe_mean(stat.get("kast") for stat in player_rows)
-        row[f"post_team_{side}_players_stats_count"] = len(player_rows) if player_rows else None
+        short_rows = []
+        for stat in short_stats:
+            try:
+                stat_team_id = int(stat.get("team_id"))
+            except (TypeError, ValueError):
+                continue
+            if stat_team_id == team_id:
+                short_rows.append(stat)
 
-        # Si no hay rondas detalladas, las estadísticas completas mantienen
-        # algunos totales observados. Short stats es el último respaldo y no
-        # reemplaza ratings/KAST, porque sus definiciones no son equivalentes.
-        if not round_stat_rows[team_id] and player_rows:
-            fallback_fields = {
-                "kills": "kills", "death": "deaths", "assists": "assists",
-                "headshots": "headshots", "first_kills": "first_kills",
-                "first_death": "first_deaths", "trade_kills": "trade_kills",
-                "trade_death": "trade_deaths", "damage": "damage",
-                "got_damage": "got_damage", "hits": "hits", "shots": "shots",
-                "flash_assists": "flash_assists", "grenades_damage": "grenades_damage",
-                "clutches": "clutches", "money_spent": "money_spent",
-                "total_equipment_value": "equipment_value",
-            }
+        enough_full_players = len(player_rows) >= 5
+        rating_values = [stat.get("player_rating") for stat in player_rows if stat.get("player_rating") is not None]
+        adr_values = [stat.get("adr") for stat in player_rows if stat.get("adr") is not None]
+        kast_values = [stat.get("kast") for stat in player_rows if stat.get("kast") is not None]
+        rating_valid = enough_full_players and len(rating_values) == len(player_rows)
+        full_adr_valid = enough_full_players and len(adr_values) == len(player_rows)
+        kast_valid = enough_full_players and len(kast_values) == len(player_rows)
+        row[f"team_{side}_rating_valid"] = rating_valid
+        row[f"team_{side}_kast_valid"] = kast_valid
+        row[f"post_team_{side}_player_rating_mean"] = safe_mean(rating_values) if rating_valid else None
+        row[f"post_team_{side}_kast_mean"] = safe_mean(kast_values) if kast_valid else None
+        row[f"post_team_{side}_players_stats_count"] = len(player_rows) or len(short_rows) or None
+
+        short_adr_values = []
+        for stat in short_rows:
+            games_count = stat.get("games_count")
+            adr_sum = stat.get("adr_sum")
+            if games_count and adr_sum is not None:
+                short_adr_values.append(float(adr_sum) / int(games_count))
+        short_adr_valid = len(short_rows) >= 5 and len(short_adr_values) == len(short_rows)
+        adr_valid = full_adr_valid or short_adr_valid
+        row[f"team_{side}_adr_valid"] = adr_valid
+        row[f"post_team_{side}_adr_mean"] = (
+            safe_mean(adr_values) if full_adr_valid else safe_mean(short_adr_values) if short_adr_valid else None
+        )
+        row[f"team_{side}_player_stats_valid"] = rating_valid and full_adr_valid and kast_valid
+
+        fallback_fields = {
+            "kills": "kills", "death": "deaths", "assists": "assists",
+            "headshots": "headshots", "first_kills": "first_kills",
+            "first_death": "first_deaths", "trade_kills": "trade_kills",
+            "trade_death": "trade_deaths", "damage": "damage",
+            "got_damage": "got_damage", "hits": "hits", "shots": "shots",
+            "flash_assists": "flash_assists", "grenades_damage": "grenades_damage",
+            "clutches": "clutches", "money_spent": "money_spent",
+            "total_equipment_value": "equipment_value",
+        }
+        short_fields = {
+            "kills_sum": "kills", "deaths_sum": "deaths", "assists_sum": "assists",
+            "headshots_sum": "headshots", "flash_assists_sum": "flash_assists",
+        }
+        round_core_valid = round_details_complete and all(
+            round_field_rows[team_id][field] == expected_rounds for field in ("kills", "deaths", "assists")
+        )
+        full_core_valid = enough_full_players and all(
+            all(stat.get(field) is not None for stat in player_rows) for field in ("kills", "death", "assists")
+        )
+        short_core_valid = len(short_rows) >= 5 and all(
+            all(stat.get(field) is not None for stat in short_rows)
+            for field in ("kills_sum", "deaths_sum", "assists_sum")
+        )
+
+        if round_core_valid:
+            for output_name in ROUND_STAT_FIELDS.values():
+                if round_field_rows[team_id][output_name] == expected_rounds:
+                    value = round_totals[team_id][output_name]
+                    row[f"post_team_{side}_{output_name}"] = int(value) if value.is_integer() else value
+            mechanical_source = "round_details"
+        elif full_core_valid:
             for source_name, output_name in fallback_fields.items():
                 values = [stat.get(source_name) for stat in player_rows if stat.get(source_name) is not None]
-                if values:
+                if len(values) == len(player_rows):
                     row[f"post_team_{side}_{output_name}"] = sum(values)
+            mechanical_source = "full_players"
             issues.append(f"team_{side}_round_stats_fallback_full_players")
-
-        if not player_rows:
-            short_rows = []
-            for stat in short_stats:
-                try:
-                    stat_team_id = int(stat.get("team_id"))
-                except (TypeError, ValueError):
-                    continue
-                if stat_team_id == team_id:
-                    short_rows.append(stat)
-            if short_rows:
-                row[f"post_team_{side}_players_stats_count"] = len(short_rows)
-                adr_values = []
-                for stat in short_rows:
-                    games_count = stat.get("games_count")
-                    adr_sum = stat.get("adr_sum")
-                    if games_count and adr_sum is not None:
-                        adr_values.append(float(adr_sum) / int(games_count))
-                row[f"post_team_{side}_adr_mean"] = safe_mean(adr_values)
-                if not round_stat_rows[team_id]:
-                    short_fields = {
-                        "kills_sum": "kills", "deaths_sum": "deaths",
-                        "assists_sum": "assists", "headshots_sum": "headshots",
-                        "flash_assists_sum": "flash_assists",
-                    }
-                    for source_name, output_name in short_fields.items():
-                        values = [stat.get(source_name) for stat in short_rows if stat.get(source_name) is not None]
-                        if values:
-                            row[f"post_team_{side}_{output_name}"] = sum(values)
-                issues.append(f"team_{side}_player_stats_fallback_short")
+        elif short_core_valid:
+            for source_name, output_name in short_fields.items():
+                values = [stat.get(source_name) for stat in short_rows if stat.get(source_name) is not None]
+                if len(values) == len(short_rows):
+                    row[f"post_team_{side}_{output_name}"] = sum(values)
+            mechanical_source = "short_players"
+            issues.append(f"team_{side}_player_stats_fallback_short")
+        else:
+            mechanical_source = None
+        row[f"team_{side}_mechanical_stats_source"] = mechanical_source
+        row[f"team_{side}_mechanical_totals_valid"] = mechanical_source is not None
 
     row["team_a_lineup_profile_ids"] = ";".join(str(value) for value in sorted(lineup_ids[team_a_id])) or None
     row["team_b_lineup_profile_ids"] = ";".join(str(value) for value in sorted(lineup_ids[team_b_id])) or None
     row["team_a_lineup_size"] = len(lineup_ids[team_a_id]) if lineup_ids[team_a_id] else None
     row["team_b_lineup_size"] = len(lineup_ids[team_b_id]) if lineup_ids[team_b_id] else None
+    row["team_a_lineup_valid"] = len(lineup_ids[team_a_id]) >= 5
+    row["team_b_lineup_valid"] = len(lineup_ids[team_b_id]) >= 5
     return row, sorted(set(issues))
 
 
@@ -865,8 +959,12 @@ def bo3_cs2_ingest():
                 "scheduled_at": entry.get("scheduled_at"), "previous_status": entry.get("source_status"),
                 "historical": bool((scheduled or now_value) < now_value - timedelta(days=7)),
             })
+        # No se confirma el registro todavia. Si una tarea posterior falla, los
+        # partidos no pueden quedar terminales sin que Intermediate/Silver hayan
+        # sido publicados. Este candidato se confirma recien en finalize_run.
         registry_document["updated_at_utc"] = iso_utc(now_value)
-        write_json_atomic(REGISTRY_PATH, registry_document)
+        prepared_path = Path(plan["run_directory"]) / "manifests" / "registry_prepared.json"
+        write_json_atomic(prepared_path, registry_document)
         batch_paths: list[str] = []
         batch_size = max(ENRICHMENT_MATCHES_PER_TASK, math.ceil(len(queue) / MAX_ENRICHMENT_TASKS),)
         for number, matches in enumerate(split_batches(queue, batch_size), start=1):
@@ -918,43 +1016,109 @@ def bo3_cs2_ingest():
         write_json_atomic(result_path, {"matches": results})
         return str(result_path)
 
+    @task
+    def fetch_rankings(plan: dict[str, Any]) -> dict[str, Any]:
+        """Completa solamente los snapshots oficiales que aun no estan en Bronze."""
+
+        run_directory = Path(plan["run_directory"])
+        dates_envelope = fetch_json(
+            RANKING_DATES_URL,
+            params={"filter[discipline_id][eq]": CS2_DISCIPLINE_ID},
+            fail_on_error=True,
+        )
+        dates_path = run_directory / "rankings" / "official_dates.json.gz"
+        write_gzip_json_atomic(dates_path, dates_envelope)
+        official_dates = parse_official_ranking_dates(dates_envelope.get("payload"))
+        if not official_dates:
+            raise RuntimeError("El endpoint de rankings no devolvio fechas oficiales.")
+
+        index_document = read_json(RANKING_INDEX_PATH, {"snapshots": {}}) or {"snapshots": {}}
+        snapshots = index_document.setdefault("snapshots", {})
+        downloaded = 0
+        reused = 0
+        for ranking_date in official_dates:
+            existing = snapshots.get(ranking_date) or {}
+            existing_paths = [Path(path) for path in existing.get("pages", [])]
+            if existing_paths and all(path.exists() for path in existing_paths):
+                reused += 1
+                continue
+            page = 1
+            total_pages = 1
+            page_paths: list[str] = []
+            snapshot_meta: dict[str, Any] = {}
+            while page <= total_pages:
+                envelope = fetch_json(
+                    RANKINGS_URL,
+                    params={
+                        "page": page,
+                        "per_page": RANKING_PAGE_SIZE,
+                        "filter[discipline_id][eq]": CS2_DISCIPLINE_ID,
+                        "filter[ranking_date][eq]": ranking_date,
+                    },
+                    fail_on_error=True,
+                )
+                destination = (
+                    run_directory / "rankings" / f"ranking_date={ranking_date}" / f"page={page:03d}.json.gz"
+                )
+                write_gzip_json_atomic(destination, envelope)
+                page_paths.append(str(destination))
+                payload = envelope.get("payload") or {}
+                meta = payload.get("meta") or {}
+                snapshot_meta = meta
+                total_pages = max(int(meta.get("total_pages") or 1), 1)
+                page += 1
+            if snapshot_meta.get("is_official") is False:
+                raise ValueError(f"La fecha {ranking_date} no fue devuelta como ranking oficial.")
+            snapshots[ranking_date] = {
+                "pages": page_paths,
+                "is_official": True,
+                "source": snapshot_meta.get("source"),
+                "source_updated_at": snapshot_meta.get("updated_at"),
+                "updated_at_utc": iso_utc(),
+            }
+            downloaded += 1
+
+        index_document.update({
+            "official_dates": official_dates,
+            "official_dates_path": str(dates_path),
+            "updated_at_utc": iso_utc(),
+        })
+        candidate_path = STAGING_DIR / f"extraction={plan['extraction_id']}" / "control" / "ranking_index.json"
+        write_json_atomic(candidate_path, index_document)
+        return {
+            "ranking_index_candidate_path": str(candidate_path),
+            "ranking_snapshots_downloaded": downloaded,
+            "ranking_snapshots_reused": reused,
+            "ranking_dates": len(official_dates),
+        }
+
     @task(trigger_rule="none_failed")
-    def update_control(
+    def update_control_candidates(
         plan: dict[str, Any], discovery_results: list[dict[str, Any]], enrichment_result_paths: list[str]
     ) -> dict[str, Any]:
-        registry_document = read_json(REGISTRY_PATH, {"matches": {}}) or {"matches": {}}
+        prepared_path = Path(plan["run_directory"]) / "manifests" / "registry_prepared.json"
+        registry_document = read_json(prepared_path, {"matches": {}}) or {"matches": {}}
         registry = registry_document.setdefault("matches", {})
         index_document = read_json(BRONZE_INDEX_PATH, {"matches": {}}) or {"matches": {}}
         bronze_index = index_document.setdefault("matches", {})
-        match_quality: list[dict[str, Any]] = []
-        discarded = Counter()
         now_value = utc_now()
         enrichment_matches_processed = 0
-        partial_directory = STAGING_DIR / f"extraction={plan['extraction_id']}" / "partials"
 
-        def process_result_batch(result_path_value: str) -> dict[str, Any]:
-            """Lee cada payload Bronze una sola vez y genera un parcial Silver atómico."""
-            result_path = Path(result_path_value)
-            result_document = read_json(result_path, {}) or {}
-            processed: list[dict[str, Any]] = []
-            rows: list[dict[str, Any]] = []
-            batch_discarded = Counter()
+        for result_path_value in enrichment_result_paths or []:
+            result_document = read_json(Path(result_path_value), {}) or {}
             for result in result_document.get("matches", []):
+                enrichment_matches_processed += 1
                 key = str(result["match_id"])
-                # Cada match pertenece a un solo lote. Se copia el índice para que
-                # los workers nunca muten estructuras compartidas entre threads.
                 indexed = dict(bronze_index.get(key, {"match_id": result["match_id"]}))
                 indexed.update({"slug": result["slug"], "updated_at_utc": result["checked_at_utc"]})
-                # Un intento fallido no puede reemplazar una respuesta válida
-                # de una corrida anterior en el índice de última versión.
                 for endpoint_name, endpoint_path in result.get("endpoint_paths", {}).items():
                     if result.get("endpoint_status", {}).get(endpoint_name) == 200:
                         indexed[endpoint_name] = endpoint_path
+                bronze_index[key] = indexed
 
                 detail_document = (
                     read_gzip_json(Path(indexed["detail"]))
-                    if indexed.get("detail") and Path(indexed["detail"]).exists()
-                    else {}
+                    if indexed.get("detail") and Path(indexed["detail"]).exists() else {}
                 )
                 detail_document = detail_document if isinstance(detail_document, dict) else {}
                 detail = detail_document.get("payload", {})
@@ -964,260 +1128,295 @@ def bo3_cs2_ingest():
                 short_stats = payload_records(envelope_payload(indexed.get("short_players_stats"), []))
                 profiles = payload_records(envelope_payload(indexed.get("game_steam_profiles"), []))
                 assessment = assess_enrichment(detail, games, full_stats, short_stats, profiles)
-                row = None
-                row_issues: list[str] = []
-                if assessment["result_valid"]:
-                    row, row_issues = build_match_row(
-                        detail, games, full_stats, short_stats, profiles,
-                        data_completeness=assessment["data_completeness"],
-                        rank_extracted_at_utc=detail_document.get("fetched_at_utc"),
-                    )
-                if row is not None:
-                    rows.append(row)
-                elif not detail:
-                    batch_discarded["detail_missing"] += 1
-                elif is_forfeit(detail):
-                    batch_discarded["forfeit"] += 1
-                elif not assessment["result_valid"]:
-                    batch_discarded["invalid_or_unfinished_result"] += 1
-                else:
-                    batch_discarded["normalization_failed"] += 1
 
-                processed.append({
-                    "key": key,
-                    "result": result,
-                    "indexed": indexed,
-                    "detail_status": detail.get("status"),
-                    "detail_parsed_status": detail.get("parsed_status"),
-                    "detail_slug": detail.get("slug"),
-                    "detail_is_forfeit": bool(detail and is_forfeit(detail)),
-                    "detail_is_finished": bool(detail and is_finished(detail.get("status"))),
-                    "assessment": assessment,
-                    "normalization_issues": row_issues,
+                entry = registry.setdefault(key, {"match_id": result["match_id"]})
+                already_processed = entry.get("last_checked_at_utc") == result["checked_at_utc"]
+                entry.update({
+                    "last_checked_at_utc": result["checked_at_utc"],
+                    "source_status": detail.get("status") or entry.get("source_status"),
+                    "source_parsed_status": detail.get("parsed_status") or entry.get("source_parsed_status"),
+                    "slug": detail.get("slug") or result["slug"],
                 })
-
-            partial_path = partial_directory / f"{result_path.stem}.csv"
-            write_dataframe_csv_atomic(partial_path, pd.DataFrame(rows, columns=SILVER_COLUMNS))
-            return {
-                "processed": processed,
-                "partial_path": str(partial_path),
-                "discarded": dict(batch_discarded),
-            }
-
-        result_paths = list(enrichment_result_paths or [])
-        partial_paths: list[str] = []
-        worker_count = min(CONTROL_IO_WORKERS, max(1, len(result_paths)))
-        LOGGER.info(
-            "update_control procesará %s lotes con %s workers de E/S",
-            len(result_paths), worker_count,
-        )
-        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="control-io") as executor:
-            futures = {
-                executor.submit(process_result_batch, result_path): result_path
-                for result_path in result_paths
-            }
-            for completed_batches, future in enumerate(as_completed(futures), start=1):
-                source_path = futures.pop(future)
-                try:
-                    batch = future.result()
-                except Exception:
-                    LOGGER.exception("Falló el procesamiento del lote %s", source_path)
-                    raise
-                partial_paths.append(batch["partial_path"])
-                discarded.update(batch["discarded"])
-                for processed_match in batch["processed"]:
-                    enrichment_matches_processed += 1
-                    key = processed_match["key"]
-                    result = processed_match["result"]
-                    assessment = processed_match["assessment"]
-                    entry = registry.setdefault(key, {"match_id": result["match_id"]})
-                    already_processed_attempt = entry.get("last_checked_at_utc") == result["checked_at_utc"]
-                    bronze_index[key] = processed_match["indexed"]
-                    entry.update({
-                        "last_checked_at_utc": result["checked_at_utc"],
-                        "source_status": processed_match["detail_status"] or entry.get("source_status"),
-                        "source_parsed_status": processed_match["detail_parsed_status"],
-                        "slug": processed_match["detail_slug"] or result["slug"],
-                    })
-                    status_codes = list(result.get("endpoint_status", {}).values())
-                    technical_failure = any(
-                        code is None or code == 429 or (isinstance(code, int) and code >= 500)
-                        for code in status_codes
-                    )
-                    if technical_failure:
-                        technical_attempts = int(entry.get("technical_attempts") or 0)
-                        if not already_processed_attempt:
-                            technical_attempts += 1
-                        entry["technical_attempts"] = technical_attempts
-                        if technical_attempts < 3:
-                            entry.update({
-                                "lifecycle_state": "pending_request",
-                                "data_completeness": assessment["data_completeness"],
-                                "next_retry_at_utc": iso_utc(now_value + timedelta(days=1)),
-                            })
-                        elif assessment["result_valid"]:
-                            entry.update({
-                                "lifecycle_state": "final_partial",
-                                "data_completeness": assessment["data_completeness"],
-                                "next_retry_at_utc": None,
-                            })
-                        else:
-                            entry.update({
-                                "lifecycle_state": "quarantined",
-                                "data_completeness": "invalid",
-                                "next_retry_at_utc": None,
-                            })
-                        assessment["issues"] = sorted(set(assessment["issues"] + ["technical_endpoint_failure"]))
-                    elif processed_match["detail_is_forfeit"]:
-                        entry.update({"lifecycle_state": "excluded_forfeit", "data_completeness": "excluded", "next_retry_at_utc": None})
-                    elif not processed_match["detail_is_finished"]:
-                        scheduled = parse_datetime(entry.get("scheduled_at"))
-                        stale = bool(scheduled and scheduled < now_value - timedelta(days=7))
+                status_codes = list(result.get("endpoint_status", {}).values())
+                technical_failure = any(
+                    code is None or code == 429 or (isinstance(code, int) and code >= 500)
+                    for code in status_codes
+                )
+                if technical_failure:
+                    attempts = int(entry.get("technical_attempts") or 0) + int(not already_processed)
+                    entry["technical_attempts"] = attempts
+                    if attempts < 3:
                         entry.update({
-                            "lifecycle_state": "quarantined" if stale else "pending_result",
-                            "data_completeness": "invalid" if stale else "pending",
-                            "next_retry_at_utc": None if stale else iso_utc(now_value + timedelta(days=1)),
+                            "lifecycle_state": "pending_request",
+                            "data_completeness": assessment["data_completeness"],
+                            "next_retry_at_utc": iso_utc(now_value + timedelta(days=1)),
                         })
+                    elif assessment["result_valid"]:
+                        entry.update({"lifecycle_state": "final_partial", "next_retry_at_utc": None})
                     else:
-                        attempts = int(entry.get("enrichment_attempts") or 0)
-                        if not already_processed_attempt:
-                            attempts += 1
-                        entry["enrichment_attempts"] = attempts
-                        first_finished = parse_datetime(entry.get("first_finished_seen_at_utc")) or now_value
-                        entry["first_finished_seen_at_utc"] = iso_utc(first_finished)
-                        if not assessment["result_valid"]:
-                            retry = next_retry_at(first_finished_at=first_finished, attempts=attempts, historical=bool(result.get("historical")))
-                            entry.update({"lifecycle_state": "pending_result" if retry else "quarantined", "next_retry_at_utc": retry})
-                        elif assessment["data_completeness"] == "complete":
-                            entry.update({"lifecycle_state": "ready", "next_retry_at_utc": None})
-                        else:
-                            retry = next_retry_at(first_finished_at=first_finished, attempts=attempts, historical=bool(result.get("historical")))
-                            entry.update({"lifecycle_state": "pending_enrichment" if retry else "final_partial", "next_retry_at_utc": retry})
-                        entry["data_completeness"] = assessment["data_completeness"]
-                    entry["quality_issues"] = assessment["issues"]
-                    match_quality.append({
-                        "match_id": result["match_id"], "slug": result["slug"],
-                        "source_status": entry.get("source_status"), "parsed_status": entry.get("source_parsed_status"),
-                        "lifecycle_state": entry.get("lifecycle_state"), **assessment,
-                        "normalization_issues": processed_match["normalization_issues"],
-                        "endpoint_status": result.get("endpoint_status", {}),
+                        entry.update({"lifecycle_state": "quarantined", "next_retry_at_utc": None})
+                    assessment["issues"] = sorted(set(assessment["issues"] + ["technical_endpoint_failure"]))
+                elif detail and is_forfeit(detail):
+                    entry.update({
+                        "lifecycle_state": "excluded_forfeit", "data_completeness": "excluded",
+                        "next_retry_at_utc": None,
                     })
-                if completed_batches % CONTROL_LOG_EVERY_BATCHES == 0 or completed_batches == len(result_paths):
-                    LOGGER.info(
-                        "update_control: %s/%s lotes, %s matches procesados",
-                        completed_batches, len(result_paths), enrichment_matches_processed,
-                    )
+                elif not detail or not is_finished(detail.get("status")):
+                    scheduled = parse_datetime(entry.get("scheduled_at"))
+                    stale = bool(scheduled and scheduled < now_value - timedelta(days=7))
+                    entry.update({
+                        "lifecycle_state": "quarantined" if stale else "pending_result",
+                        "data_completeness": "invalid" if stale else "pending",
+                        "next_retry_at_utc": None if stale else iso_utc(now_value + timedelta(days=1)),
+                    })
+                else:
+                    attempts = int(entry.get("enrichment_attempts") or 0) + int(not already_processed)
+                    entry["enrichment_attempts"] = attempts
+                    first_finished = parse_datetime(entry.get("first_finished_seen_at_utc")) or now_value
+                    entry["first_finished_seen_at_utc"] = iso_utc(first_finished)
+                    if not assessment["result_valid"]:
+                        retry = next_retry_at(
+                            first_finished_at=first_finished, attempts=attempts,
+                            historical=bool(result.get("historical")),
+                        )
+                        entry.update({
+                            "lifecycle_state": "pending_result" if retry else "quarantined",
+                            "next_retry_at_utc": retry,
+                        })
+                    elif assessment["data_completeness"] == "complete":
+                        entry.update({"lifecycle_state": "ready", "next_retry_at_utc": None})
+                    else:
+                        retry = next_retry_at(
+                            first_finished_at=first_finished, attempts=attempts,
+                            historical=bool(result.get("historical")),
+                        )
+                        entry.update({
+                            "lifecycle_state": "pending_enrichment" if retry else "final_partial",
+                            "next_retry_at_utc": retry,
+                        })
+                    entry["data_completeness"] = assessment["data_completeness"]
+                entry["quality_issues"] = assessment["issues"]
 
-        partial_paths.sort()
-        match_quality.sort(key=lambda value: int(value["match_id"]))
+        state = read_json(STATE_PATH, {}) or {}
         if plan.get("discovery_end_date"):
-            state = {
-                "last_discovered_date": plan["discovery_end_date"], "last_successful_extraction": plan["extraction_id"],
-                "last_successful_run_id": plan["airflow_run_id"], "updated_at_utc": iso_utc(now_value),
-            }
-        else:
-            state = read_json(STATE_PATH, {}) or {}
-            state.update({
-                "last_successful_extraction": plan["extraction_id"], "last_successful_run_id": plan["airflow_run_id"],
-                "updated_at_utc": iso_utc(now_value),
-            })
+            state["last_discovered_date"] = plan["discovery_end_date"]
+        state.update({
+            "last_successful_extraction": plan["extraction_id"],
+            "last_successful_run_id": plan["airflow_run_id"],
+            "updated_at_utc": iso_utc(now_value),
+        })
         registry_document["updated_at_utc"] = iso_utc(now_value)
         index_document["updated_at_utc"] = iso_utc(now_value)
-        write_json_atomic(REGISTRY_PATH, registry_document)
-        write_json_atomic(BRONZE_INDEX_PATH, index_document)
-        write_json_atomic(STATE_PATH, state)
-        run_quality_path = Path(plan["run_directory"]) / "manifests" / "match_quality.jsonl"
-        write_jsonl_atomic(run_quality_path, match_quality)
-        quarantine = [{
+        control_dir = STAGING_DIR / f"extraction={plan['extraction_id']}" / "control"
+        registry_candidate_path = control_dir / "match_registry.json"
+        bronze_index_candidate_path = control_dir / "bronze_index.json"
+        state_candidate_path = control_dir / "pipeline_state.json"
+        quarantine_candidate_path = control_dir / "quarantine.jsonl"
+        write_json_atomic(registry_candidate_path, registry_document)
+        write_json_atomic(bronze_index_candidate_path, index_document)
+        write_json_atomic(state_candidate_path, state)
+        write_jsonl_atomic(quarantine_candidate_path, ({
             "match_id": value.get("match_id"), "slug": value.get("slug"),
-            "reason": value.get("quality_issues", []), "last_checked_at_utc": value.get("last_checked_at_utc"),
-        } for value in registry.values() if value.get("lifecycle_state") == "quarantined"]
-        write_jsonl_atomic(QUALITY_DIR / "quarantine.jsonl", quarantine)
+            "reason": value.get("quality_issues", []),
+            "last_checked_at_utc": value.get("last_checked_at_utc"),
+        } for value in registry.values() if value.get("lifecycle_state") == "quarantined"))
         return {
-            **state, "extraction_id": plan["extraction_id"], "airflow_run_id": plan["airflow_run_id"],
-            "run_directory": plan["run_directory"], "discovery_batches": len(discovery_results or []),
-            "enrichment_batches": len(enrichment_result_paths or []), "matches_in_registry": len(registry),
+            **state,
+            "extraction_id": plan["extraction_id"], "airflow_run_id": plan["airflow_run_id"],
+            "run_directory": plan["run_directory"],
+            "registry_candidate_path": str(registry_candidate_path),
+            "bronze_index_candidate_path": str(bronze_index_candidate_path),
+            "state_candidate_path": str(state_candidate_path),
+            "quarantine_candidate_path": str(quarantine_candidate_path),
             "dates_discovered": sum(len(result.get("dates", [])) for result in discovery_results or []),
             "matches_discovered": sum(int(result.get("matches", 0)) for result in discovery_results or []),
             "matches_enriched": enrichment_matches_processed,
-            "match_quality_path": str(run_quality_path),
-            "silver_partial_paths": partial_paths,
-            "discarded": dict(discarded),
+            "matches_in_registry": len(registry),
         }
 
     @task
-    def transform_to_silver(control: dict[str, Any]) -> dict[str, Any]:
-        partial_paths = [Path(value) for value in control.get("silver_partial_paths", [])]
-        frames: list[pd.DataFrame] = []
-        latest_path = SILVER_DIR / "matches_latest.csv"
-        if latest_path.exists():
-            latest = pd.read_csv(latest_path, low_memory=False)
-            if list(latest.columns) != SILVER_COLUMNS:
-                raise ValueError("El Silver existente no tiene el esquema canónico esperado.")
-            frames.append(latest)
+    def build_dataset_candidates(control: dict[str, Any], ranking: dict[str, Any]) -> dict[str, Any]:
+        """Reconstruye hechos desde Bronze local y luego calcula el Silver."""
 
-        for partial_path in partial_paths:
-            partial = pd.read_csv(partial_path, low_memory=False)
-            if list(partial.columns) != SILVER_COLUMNS:
-                raise ValueError(f"El parcial Silver tiene un esquema inválido: {partial_path}")
-            if not partial.empty:
-                frames.append(partial)
-        if not frames:
-            raise RuntimeError("No se pudo construir ninguna fila Silver válida.")
+        index_document = read_json(Path(control["bronze_index_candidate_path"]), {"matches": {}}) or {}
+        bronze_index = index_document.get("matches", {})
+        registry_document = read_json(Path(control["registry_candidate_path"]), {"matches": {}}) or {}
+        registry = registry_document.get("matches", {})
+        ranking_document = read_json(Path(ranking["ranking_index_candidate_path"]), {"snapshots": {}}) or {}
+        ranking_payloads: list[dict[str, Any]] = []
+        current_official_dates = set(ranking_document.get("official_dates", []))
+        for ranking_date, snapshot in ranking_document.get("snapshots", {}).items():
+            if ranking_date not in current_official_dates:
+                continue
+            if not snapshot.get("is_official", True):
+                continue
+            for page_path in snapshot.get("pages", []):
+                payload = envelope_payload(page_path, {})
+                if isinstance(payload, dict):
+                    ranking_payloads.append(payload)
+        rankings_by_date = normalize_ranking_payloads(ranking_payloads)
 
-        # El Silver previo preserva el histórico en corridas incrementales; los
-        # parciales actuales van después y reemplazan el match por clave primaria.
-        dataframe = pd.concat(frames, ignore_index=True)[SILVER_COLUMNS]
-        dataframe.drop_duplicates("match_id", keep="last", inplace=True)
-        dataframe.sort_values(["start_at_utc", "match_id"], inplace=True, na_position="last")
-        dataframe.reset_index(drop=True, inplace=True)
-        extraction_id = control["extraction_id"]
-        staging_directory = STAGING_DIR / f"extraction={extraction_id}"
-        staging_directory.mkdir(parents=True, exist_ok=True)
-        candidate_path = staging_directory / "matches_candidate.csv"
-        write_dataframe_csv_atomic(candidate_path, dataframe)
-        match_quality_path = QUALITY_DIR / f"extraction={extraction_id}" / "match_quality.jsonl"
-        copy_file_atomic(Path(control["match_quality_path"]), match_quality_path)
+        def normalize_indexed(item: tuple[str, dict[str, Any]]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+            key, indexed = item
+            detail_document = (
+                read_gzip_json(Path(indexed["detail"]))
+                if indexed.get("detail") and Path(indexed["detail"]).exists() else {}
+            )
+            detail_document = detail_document if isinstance(detail_document, dict) else {}
+            detail = detail_document.get("payload", {})
+            detail = detail if isinstance(detail, dict) else {}
+            games = payload_records(envelope_payload(indexed.get("games"), []))
+            full_stats = payload_records(envelope_payload(indexed.get("players_stats"), []))
+            short_stats = payload_records(envelope_payload(indexed.get("short_players_stats"), []))
+            profiles = payload_records(envelope_payload(indexed.get("game_steam_profiles"), []))
+            assessment = assess_enrichment(detail, games, full_stats, short_stats, profiles)
+            row = None
+            normalization_issues: list[str] = []
+            if assessment["result_valid"]:
+                row, normalization_issues = build_match_row(
+                    detail, games, full_stats, short_stats, profiles,
+                    data_completeness=assessment["data_completeness"],
+                    rank_extracted_at_utc=detail_document.get("fetched_at_utc"),
+                )
+            entry = registry.get(key, {})
+            if row is not None:
+                row.update({
+                    "lifecycle_state": entry.get("lifecycle_state"),
+                    "quality_issues": ";".join(assessment["issues"]) or None,
+                    "normalization_issues": ";".join(normalization_issues) or None,
+                })
+            quality = {
+                "match_id": int(key), "slug": indexed.get("slug"),
+                "source_status": detail.get("status"), "parsed_status": detail.get("parsed_status"),
+                "lifecycle_state": entry.get("lifecycle_state"), **assessment,
+                "normalization_issues": normalization_issues,
+            }
+            return row, quality
+
+        facts: list[dict[str, Any]] = []
+        quality_rows: list[dict[str, Any]] = []
+        indexed_items = list(bronze_index.items())
+        worker_count = min(CONTROL_IO_WORKERS, max(1, len(indexed_items)))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="facts-io") as executor:
+            processed = 0
+            for item_batch in split_batches(indexed_items, 1000):
+                futures = [executor.submit(normalize_indexed, item) for item in item_batch]
+                for future in as_completed(futures):
+                    row, quality = future.result()
+                    if row is not None:
+                        facts.append(row)
+                    quality_rows.append(quality)
+                    processed += 1
+                LOGGER.info(
+                    "Intermediate: %s/%s partidos leidos desde Bronze", processed, len(indexed_items)
+                )
+
+        if not facts:
+            raise RuntimeError("No se pudo reconstruir ningun hecho valido desde Bronze.")
+        facts = attach_historical_rankings(facts, rankings_by_date)
+        facts.sort(key=lambda value: (value.get("start_at_utc") or "", int(value["match_id"])))
+        quality_rows.sort(key=lambda value: int(value["match_id"]))
+        silver_rows = build_point_in_time_silver(facts)
+
+        staging_directory = STAGING_DIR / f"extraction={control['extraction_id']}"
+        facts_candidate_path = staging_directory / "match_facts_candidate.csv"
+        silver_candidate_path = staging_directory / "matches_silver_candidate.csv"
+        match_quality_candidate_path = staging_directory / "match_quality.jsonl"
+        write_dataframe_csv_atomic(
+            facts_candidate_path, pd.DataFrame(facts, columns=MATCH_FACT_COLUMNS)
+        )
+        write_dataframe_csv_atomic(
+            silver_candidate_path, pd.DataFrame(silver_rows, columns=SILVER_COLUMNS)
+        )
+        write_jsonl_atomic(match_quality_candidate_path, quality_rows)
         return {
-            **control, "candidate_path": str(candidate_path), "match_quality_path": str(match_quality_path),
-            "rows": len(dataframe), "columns": len(dataframe.columns),
+            **control, **ranking,
+            "facts_candidate_path": str(facts_candidate_path),
+            "silver_candidate_path": str(silver_candidate_path),
+            "match_quality_candidate_path": str(match_quality_candidate_path),
+            "facts_rows": len(facts), "facts_columns": len(MATCH_FACT_COLUMNS),
+            "rows": len(silver_rows), "columns": len(SILVER_COLUMNS),
         }
 
     @task
     def validate_and_report(transformation: dict[str, Any]) -> dict[str, Any]:
-        dataframe = pd.read_csv(transformation["candidate_path"], low_memory=False)
-        duplicate_ids = int(dataframe["match_id"].duplicated().sum())
-        all_null_columns = dataframe.columns[dataframe.isna().all()].tolist()
-        target_values = set(dataframe["target_team_a_won"].dropna().astype(int).unique())
-        winner_valid = ((dataframe["winner_team_id"] == dataframe["team_a_id"]) | (dataframe["winner_team_id"] == dataframe["team_b_id"])).all()
+        facts = pd.read_csv(transformation["facts_candidate_path"], low_memory=False)
+        silver = pd.read_csv(transformation["silver_candidate_path"], low_memory=False)
+        duplicate_fact_ids = int(facts["match_id"].duplicated().sum())
+        duplicate_silver_ids = int(silver["match_id"].duplicated().sum())
+        target_values = set(silver["target_team_a_won"].dropna().astype(int).unique())
+        winner_valid = (
+            (facts["winner_team_id"] == facts["team_a_id"])
+            | (facts["winner_team_id"] == facts["team_b_id"])
+        ).all()
+        expected_silver_rows = int(facts["start_at_utc"].notna().sum())
+        ranking_ages = pd.to_numeric(silver["ranking_age_days"], errors="coerce").dropna()
+        forbidden_columns = {
+            "end_at_utc", "duration_seconds", "winner_team_id", "loser_team_id",
+            "parsed_status", "data_completeness", "lifecycle_state",
+        }
+        minimum_rules = {
+            "team_a_winrate_last10": "team_a_winrate_last10_count",
+            "team_b_winrate_last10": "team_b_winrate_last10_count",
+            "team_a_kda_last20": "team_a_kda_last20_count",
+            "team_b_kda_last20": "team_b_kda_last20_count",
+        }
+        insufficient_values_are_null = all(
+            not silver.loc[pd.to_numeric(silver[count], errors="coerce") < 5, value].notna().any()
+            for value, count in minimum_rules.items()
+        )
         checks = {
-            "schema_exact": list(dataframe.columns) == SILVER_COLUMNS,
-            "at_least_1000_rows": len(dataframe) >= MIN_SILVER_ROWS,
-            "primary_key_not_null": not dataframe["match_id"].isna().any(),
-            "primary_key_unique": duplicate_ids == 0,
-            "teams_are_distinct": bool((dataframe["team_a_id"] != dataframe["team_b_id"]).all()),
+            "facts_schema_exact": list(facts.columns) == MATCH_FACT_COLUMNS,
+            "silver_schema_exact": list(silver.columns) == SILVER_COLUMNS,
+            "at_least_1000_rows": len(silver) >= MIN_SILVER_ROWS,
+            "facts_primary_key_not_null": not facts["match_id"].isna().any(),
+            "facts_primary_key_unique": duplicate_fact_ids == 0,
+            "silver_primary_key_unique": duplicate_silver_ids == 0,
+            "one_silver_row_per_eligible_fact": len(silver) == expected_silver_rows,
+            "teams_are_distinct": bool((silver["team_a_id"] != silver["team_b_id"]).all()),
             "winner_is_participant": bool(winner_valid),
             "binary_target": target_values.issubset({0, 1}) and bool(target_values),
-            "target_not_null": not dataframe["target_team_a_won"].isna().any(),
-            "no_all_null_columns": not all_null_columns,
-            "at_least_5_useful_columns": int(dataframe.notna().any().sum()) >= 5,
+            "target_not_null": not silver["target_team_a_won"].isna().any(),
+            "no_post_columns_in_silver": not any(column.startswith("post_") for column in silver.columns),
+            "no_forbidden_result_metadata": forbidden_columns.isdisjoint(silver.columns),
+            "historical_ranking_strictly_prior": bool((ranking_ages >= 1).all()),
+            "minimum_observations_enforced": insufficient_values_are_null,
         }
         errors = [name for name, passed in checks.items() if not passed]
-        registry = (read_json(REGISTRY_PATH, {"matches": {}}) or {}).get("matches", {})
+        registry = (
+            read_json(Path(transformation["registry_candidate_path"]), {"matches": {}}) or {}
+        ).get("matches", {})
         lifecycle_counts = Counter(value.get("lifecycle_state", "unknown") for value in registry.values())
         report = {
             "extraction_id": transformation["extraction_id"], "generated_at_utc": iso_utc(),
-            "valid": not errors, "rows": len(dataframe), "columns": len(dataframe.columns),
+            "valid": not errors,
+            "intermediate_rows": len(facts), "intermediate_columns": len(facts.columns),
+            "silver_rows": len(silver), "silver_columns": len(silver.columns),
             "primary_key": "match_id", "target": "target_team_a_won",
-            "duplicate_match_ids": duplicate_ids, "all_null_columns": all_null_columns,
-            "target_distribution": dataframe["target_team_a_won"].value_counts(dropna=False).to_dict(),
-            "parsed_status_distribution": dataframe["parsed_status"].value_counts(dropna=False).to_dict(),
-            "data_completeness_distribution": dataframe["data_completeness"].value_counts(dropna=False).to_dict(),
+            "duplicate_intermediate_match_ids": duplicate_fact_ids,
+            "duplicate_silver_match_ids": duplicate_silver_ids,
+            "target_distribution": {
+                str(key): int(value)
+                for key, value in silver["target_team_a_won"].value_counts(dropna=False).items()
+            },
+            "parsed_status_distribution": {
+                str(key): int(value)
+                for key, value in facts["parsed_status"].value_counts(dropna=False).items()
+            },
+            "data_completeness_distribution": {
+                str(key): int(value)
+                for key, value in facts["data_completeness"].value_counts(dropna=False).items()
+            },
             "lifecycle_distribution": dict(lifecycle_counts),
-            "null_fraction_by_column": dataframe.isna().mean().sort_values(ascending=False).to_dict(),
-            "discarded": transformation["discarded"], "checks": checks, "errors": errors,
+            "silver_null_fraction_by_column": {
+                str(key): float(value)
+                for key, value in silver.isna().mean().sort_values(ascending=False).items()
+            },
+            "ranking_snapshots_downloaded": transformation["ranking_snapshots_downloaded"],
+            "ranking_snapshots_reused": transformation["ranking_snapshots_reused"],
+            "checks": checks, "errors": errors,
         }
-        report_directory = QUALITY_DIR / f"extraction={transformation['extraction_id']}"
+        report_directory = STAGING_DIR / f"extraction={transformation['extraction_id']}" / "quality"
         report_path = report_directory / "quality_report.json"
         write_json_atomic(report_path, report)
         if errors:
@@ -1227,43 +1426,86 @@ def bo3_cs2_ingest():
     @task
     def publish_dataset(validation: dict[str, Any]) -> dict[str, Any]:
         extraction_id = validation["extraction_id"]
-        version_directory = SILVER_DIR / f"extraction={extraction_id}"
-        version_directory.mkdir(parents=True, exist_ok=True)
-        version_path = version_directory / "matches.csv"
-        copy_file_atomic(Path(validation["candidate_path"]), version_path)
-        metadata = {
-            "dataset": "Bo3.gg CS2 matches",
+        intermediate_version_directory = INTERMEDIATE_DIR / f"extraction={extraction_id}"
+        silver_version_directory = SILVER_DIR / f"extraction={extraction_id}"
+        quality_version_directory = QUALITY_DIR / f"extraction={extraction_id}"
+        facts_version_path = intermediate_version_directory / "match_facts.csv"
+        silver_version_path = silver_version_directory / "matches.csv"
+        quality_report_path = quality_version_directory / "quality_report.json"
+        match_quality_path = quality_version_directory / "match_quality.jsonl"
+        copy_file_atomic(Path(validation["facts_candidate_path"]), facts_version_path)
+        copy_file_atomic(Path(validation["silver_candidate_path"]), silver_version_path)
+        copy_file_atomic(Path(validation["quality_report_path"]), quality_report_path)
+        copy_file_atomic(Path(validation["match_quality_candidate_path"]), match_quality_path)
+
+        facts_metadata = {
+            "dataset": "Bo3.gg CS2 match facts (support table)",
             "unit_of_analysis": "one finished competitive match between two teams",
             "primary_key": "match_id", "target": "target_team_a_won",
             "extraction_id": extraction_id, "airflow_run_id": validation["airflow_run_id"],
-            "rows": validation["rows"], "columns": validation["columns"],
-            "published_at_utc": iso_utc(), "quality_report_path": validation["quality_report_path"],
+            "rows": validation["facts_rows"], "columns": validation["facts_columns"],
+            "published_at_utc": iso_utc(), "quality_report_path": str(quality_report_path),
             "notes": [
-                "post_* columns describe the observed match and must not be used to predict that same match",
-                "team ranks are values observed at extraction time, not guaranteed historical ranks",
-                "Gold historical features must use only matches with start_at_utc earlier than the predicted match",
+                "support table; it is not the analytical Silver",
+                "post_* fields describe the observed match and never enter the same match as predictors",
+                "validity flags decide which feature families each partial match can feed",
             ],
         }
-        write_json_atomic(version_directory / "metadata.json", metadata)
-        SILVER_DIR.mkdir(parents=True, exist_ok=True)
-        latest_path = SILVER_DIR / "matches_latest.csv"
-        copy_file_atomic(version_path, latest_path)
-        write_json_atomic(SILVER_DIR / "metadata_latest.json", metadata)
-        return {**validation, "dataset_path": str(version_path), "latest_path": str(latest_path), "metadata_path": str(version_directory / "metadata.json")}
+        silver_metadata = {
+            "dataset": "Bo3.gg CS2 point-in-time analytical Silver",
+            "unit_of_analysis": "one match to predict",
+            "primary_key": "match_id", "target": "target_team_a_won",
+            "extraction_id": extraction_id, "airflow_run_id": validation["airflow_run_id"],
+            "rows": validation["rows"], "columns": validation["columns"],
+            "published_at_utc": iso_utc(), "quality_report_path": str(quality_report_path),
+            "notes": [
+                "all historical features use matches with end_at_utc strictly before start_at_utc",
+                "official ranking snapshot is strictly earlier than the match calendar date",
+                "rolling performance values require five valid observations; coverage counters remain published",
+                "missing observations stay null and are never imputed as zero",
+            ],
+        }
+        write_json_atomic(intermediate_version_directory / "metadata.json", facts_metadata)
+        write_json_atomic(silver_version_directory / "metadata.json", silver_metadata)
+
+        facts_latest_path = INTERMEDIATE_DIR / "match_facts_latest.csv"
+        silver_latest_path = SILVER_DIR / "matches_latest.csv"
+        copy_file_atomic(facts_version_path, facts_latest_path)
+        write_json_atomic(INTERMEDIATE_DIR / "metadata_latest.json", facts_metadata)
+        copy_file_atomic(silver_version_path, silver_latest_path)
+        write_json_atomic(SILVER_DIR / "metadata_latest.json", silver_metadata)
+        return {
+            **validation,
+            "facts_dataset_path": str(facts_version_path),
+            "facts_latest_path": str(facts_latest_path),
+            "dataset_path": str(silver_version_path), "latest_path": str(silver_latest_path),
+            "quality_report_path": str(quality_report_path),
+            "match_quality_path": str(match_quality_path),
+        }
 
     @task
     def finalize_run(publication: dict[str, Any]) -> str:
+        # Los controles se confirman solo despues de validar y publicar ambos
+        # datasets. pipeline_state va ultimo: es el cursor que evita redescubrir.
+        copy_file_atomic(Path(publication["registry_candidate_path"]), REGISTRY_PATH)
+        copy_file_atomic(Path(publication["bronze_index_candidate_path"]), BRONZE_INDEX_PATH)
+        copy_file_atomic(Path(publication["ranking_index_candidate_path"]), RANKING_INDEX_PATH)
+        copy_file_atomic(Path(publication["quarantine_candidate_path"]), QUALITY_DIR / "quarantine.jsonl")
+        copy_file_atomic(Path(publication["state_candidate_path"]), STATE_PATH)
         run_directory = Path(publication["run_directory"])
         manifest_path = run_directory / "manifest.json"
         manifest = {
             "extraction_id": publication["extraction_id"], "airflow_run_id": publication["airflow_run_id"],
-            "completed_at_utc": iso_utc(), "dataset_path": publication["dataset_path"],
+            "completed_at_utc": iso_utc(),
+            "intermediate_path": publication["facts_dataset_path"],
+            "dataset_path": publication["dataset_path"],
             "latest_path": publication["latest_path"], "quality_report_path": publication["quality_report_path"],
             "rows": publication["rows"], "columns": publication["columns"],
             "dates_discovered": publication["dates_discovered"],
             "matches_discovered": publication["matches_discovered"],
             "matches_enriched": publication["matches_enriched"],
-            "discarded": publication["discarded"],
+            "ranking_snapshots_downloaded": publication["ranking_snapshots_downloaded"],
+            "ranking_snapshots_reused": publication["ranking_snapshots_reused"],
         }
         write_json_atomic(manifest_path, manifest)
         success_path = run_directory / "_SUCCESS"
@@ -1271,12 +1513,13 @@ def bo3_cs2_ingest():
         return str(success_path)
 
     plan = build_plan()
+    rankings = fetch_rankings(plan)
     batches = date_batches(plan)
     discoveries = discover_batch.expand(batch=batches)
     enrichment_queues = prepare_enrichment(plan, discoveries)
     enrichment_results = enrich_batch.expand(queue_path=enrichment_queues)
-    control = update_control(plan, discoveries, enrichment_results)
-    candidate = transform_to_silver(control)
+    control = update_control_candidates(plan, discoveries, enrichment_results)
+    candidate = build_dataset_candidates(control, rankings)
     validation = validate_and_report(candidate)
     publication = publish_dataset(validation)
     finalize_run(publication)
