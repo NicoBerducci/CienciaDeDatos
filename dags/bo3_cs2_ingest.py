@@ -6,13 +6,14 @@ Capas publicadas:
 * Intermediate: hechos observados por partido, estados y validez por familia.
 * Silver analitico: una fila predictiva por partido con estadisticas historicas.
 
-El Silver se calcula siempre antes de incorporar el resultado del partido
-actual. Las columnas ``post_*`` existen solo en Intermediate.
+Las features se calculan solo con partidos de CS2 anteriores al actual. Silver
+conserva tambien finalizacion y mapas ganados como metadatos, no predictores.
 """
 
 from __future__ import annotations
 
 import gzip
+import gc
 import hashlib
 import json
 import logging
@@ -33,12 +34,27 @@ from airflow.sdk import dag, get_current_context, task
 from pendulum import datetime
 
 from bo3_cs2_features import (
+    CS2_GAME_VERSION,
+    POST_MATCH_METADATA_COLUMNS,
+    PREDICTOR_EXCLUDED_COLUMNS,
     SILVER_COLUMNS,
     attach_historical_rankings,
     build_point_in_time_silver,
+    is_eligible_cs2_fact,
+    iter_point_in_time_silver,
     normalize_ranking_payloads,
     parse_official_ranking_dates,
 )
+from bo3_cs2_rebuild import (
+    CheckpointStore,
+    ENDPOINT_KEYS,
+    atomic_text_writer,
+    build_fingerprint,
+    log_memory,
+    source_signature,
+    write_csv_rows_atomic,
+)
+from bo3_cs2_quality import QUALITY_POLICY_VERSION, evaluate_match_quality, reviewed_exclusion
 
 
 BASE_URL = "https://api.bo3.gg/api"
@@ -59,6 +75,7 @@ MAX_GAMES_PER_MATCH = 5
 MIN_SILVER_ROWS = 1_000
 RECENT_RETRY_OFFSETS_DAYS = (1, 3, 7)
 CONTROL_IO_WORKERS = 8
+REBUILD_BATCH_SIZE = 1000
 CONTROL_LOG_EVERY_BATCHES = 10
 RANKING_PAGE_SIZE = 500
 
@@ -184,6 +201,25 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def verify_rebuild_seal(transformation: dict[str, Any]) -> None:
+    """Evita validar/publicar archivos parciales o mezclados entre intentos."""
+    if not transformation.get("rebuild_complete_path"):
+        # Compatibilidad con extracciones anteriores a los checkpoints.
+        return
+    seal = read_json(Path(transformation["rebuild_complete_path"]), {}) or {}
+    expected_files = {transformation[name] for name in (
+        "facts_candidate_path", "silver_candidate_path", "match_quality_candidate_path",
+        "registry_candidate_path", "quarantine_candidate_path",
+    )}
+    if (seal.get("fingerprint") != transformation.get("rebuild_fingerprint")
+            or set(seal.get("files", {})) != expected_files
+            or seal.get("facts_rows") != transformation["facts_rows"]
+            or seal.get("silver_rows") != transformation["rows"]
+            or seal.get("quality_rows") != seal.get("indexed_matches")
+            or any(file_sha256(Path(path)) != digest for path, digest in seal.get("files", {}).items())):
+        raise ValueError("Reconstruccion incompleta o candidatos modificados; no se publica.")
 
 
 def split_batches(values: list[Any], size: int) -> list[list[Any]]:
@@ -320,7 +356,8 @@ def is_finished(status: Any) -> bool:
 def is_forfeit(detail: dict[str, Any]) -> bool:
     status = str(detail.get("status") or "").strip().lower()
     return bool(
-        detail.get("forfeit")
+        reviewed_exclusion(detail)
+        or detail.get("forfeit")
         or detail.get("defwin")
         or detail.get("walkover")
         or status in {"defwin", "forfeit", "walkover", "w/o"}
@@ -349,10 +386,11 @@ def assess_enrichment(
     profiles: list[dict[str, Any]],
 ) -> dict[str, Any]:
     issues: list[str] = []
-    valid_result = match_result_valid(detail)
+    integrity = evaluate_match_quality(detail, games)
+    valid_result = match_result_valid(detail) and integrity["result_valid"]
     start_at = parse_datetime(detail.get("start_date") or detail.get("begin_at"))
     end_at = parse_datetime(detail.get("end_date") or detail.get("end_at"))
-    end_time_valid = bool(start_at and end_at and end_at >= start_at)
+    end_time_valid = integrity["end_time_valid"]
     if not valid_result:
         issues.append("invalid_or_non_competitive_result")
     if not end_time_valid:
@@ -384,9 +422,12 @@ def assess_enrichment(
     if not profiles:
         issues.append("historical_lineup_missing")
 
-    maps_complete = bool(games) and complete_games == len(games)
+    maps_complete = integrity["maps_complete"]
     rounds_complete = rounds_reported > 0 and rounds_reported == rounds_received
-    if valid_result and games and complete_games == len(games) and full_stats and profiles and rounds_complete:
+    if integrity["quality_state"] == "excluded_forfeit":
+        completeness = "excluded"
+    elif (valid_result and integrity["start_time_valid"] and end_time_valid
+            and integrity["map_stats_valid"] and full_stats and profiles and rounds_complete):
         completeness = "complete"
     elif valid_result and (games or full_stats or short_stats or profiles):
         completeness = "partial"
@@ -396,6 +437,7 @@ def assess_enrichment(
         completeness = "invalid"
 
     return {
+        **integrity,
         "result_valid": valid_result,
         "end_time_valid": end_time_valid,
         "maps_complete": maps_complete,
@@ -408,7 +450,7 @@ def assess_enrichment(
         "full_stats_rows": len(full_stats),
         "short_stats_rows": len(short_stats),
         "profiles_rows": len(profiles),
-        "issues": sorted(set(issues)),
+        "issues": sorted(set(issues + integrity["issues"])),
     }
 
 
@@ -512,6 +554,11 @@ def build_match_fact_columns() -> list[str]:
 
 
 MATCH_FACT_COLUMNS = build_match_fact_columns()
+MATCH_FACT_COLUMNS += [
+    "quality_policy_version", "quality_state", "start_time_valid", "series_score_valid",
+    "maps_complete", "map_stats_valid", "statistics_blocked", "source_team1_score",
+    "source_team2_score", "series_score_source", "reviewed_decision_source",
+]
 
 
 def build_match_row(
@@ -529,6 +576,9 @@ def build_match_row(
     issues: list[str] = []
     if not match_result_valid(detail):
         return None, ["invalid_or_non_competitive_result"]
+
+    integrity = evaluate_match_quality(detail, games)
+    issues.extend(integrity["issues"])
 
     source_team1 = detail.get("team1") or {}
     source_team2 = detail.get("team2") or {}
@@ -661,10 +711,11 @@ def build_match_row(
     if len(ordered_games) > MAX_GAMES_PER_MATCH:
         issues.append("more_than_five_games")
 
-    maps_valid = bool(ordered_games) and valid_games == len(ordered_games)
-    round_scores_valid = maps_valid
+    # Marcador de serie y estadisticas de mapas son familias independientes.
+    maps_valid = integrity["series_score_valid"]
+    round_scores_valid = integrity["map_stats_valid"] and valid_games == len(ordered_games)
     round_details_complete = bool(
-        expected_rounds > 0 and received_rounds == expected_rounds
+        round_scores_valid and expected_rounds > 0 and received_rounds == expected_rounds
         and round_stat_rows[team_a_id] == expected_rounds
         and round_stat_rows[team_b_id] == expected_rounds
     )
@@ -672,9 +723,9 @@ def build_match_row(
         "maps_valid": maps_valid,
         "round_scores_valid": round_scores_valid,
         "round_details_complete": round_details_complete,
-        "post_team_a_maps_won": maps_won[team_a_id] if maps_valid else None,
-        "post_team_b_maps_won": maps_won[team_b_id] if maps_valid else None,
-        "post_maps_played": len(ordered_games) if maps_valid else None,
+        "post_team_a_maps_won": (detail.get("team1_score") if team_a_id == source_team1_id else detail.get("team2_score")) if maps_valid else None,
+        "post_team_b_maps_won": (detail.get("team2_score") if team_a_id == source_team1_id else detail.get("team1_score")) if maps_valid else None,
+        "post_maps_played": int(detail["team1_score"]) + int(detail["team2_score"]) if maps_valid else None,
         "post_team_a_rounds_won": rounds_won[team_a_id] if round_scores_valid else None,
         "post_team_b_rounds_won": rounds_won[team_b_id] if round_scores_valid else None,
         "post_round_difference_a": rounds_won[team_a_id] - rounds_won[team_b_id] if round_scores_valid else None,
@@ -832,6 +883,18 @@ def build_match_row(
     row["team_b_lineup_size"] = len(lineup_ids[team_b_id]) if lineup_ids[team_b_id] else None
     row["team_a_lineup_valid"] = len(lineup_ids[team_a_id]) >= 5
     row["team_b_lineup_valid"] = len(lineup_ids[team_b_id]) >= 5
+    row.update({key: value for key, value in integrity.items() if key != "issues"})
+    if integrity["statistics_blocked"]:
+        # Los resúmenes de jugadores proceden de los mismos mapas: no son una
+        # confirmacion independiente de un mapa incompleto o mal atribuido.
+        for side in ("a", "b"):
+            for suffix in ("player_stats_valid", "rating_valid", "adr_valid", "kast_valid",
+                           "mechanical_totals_valid", "lineup_valid"):
+                row[f"team_{side}_{suffix}"] = False
+            row[f"team_{side}_mechanical_stats_source"] = None
+            for suffix in (*ROUND_STAT_FIELDS.values(), "player_rating_mean", "adr_mean", "kast_mean"):
+                row[f"post_team_{side}_{suffix}"] = None
+        issues.append("dependent_statistics_blocked")
     return row, sorted(set(issues))
 
 
@@ -861,7 +924,12 @@ def bo3_cs2_ingest():
         extraction_id, airflow_run_id = extraction_identity()
         context = get_current_context()
         interval_end = context.get("data_interval_end")
-        today_utc = interval_end.in_timezone("UTC").date() if interval_end is not None else utc_now().date()
+        run_type = getattr(context.get("dag_run"), "run_type", context.get("run_type"))
+        manual = str(getattr(run_type, "value", run_type)) == "manual"
+        # Trigger manual reconstruye con el cursor y dias completos hasta hoy;
+        # no queda atrasado por el intervalo inferido de la programacion diaria.
+        today_utc = (interval_end.in_timezone("UTC").date()
+                     if interval_end is not None and not manual else utc_now().date())
         today_utc = min(today_utc, utc_now().date())
         last_complete_date = today_utc - timedelta(days=1)
         state = read_json(STATE_PATH, {}) or {}
@@ -1236,25 +1304,33 @@ def bo3_cs2_ingest():
 
     @task
     def build_dataset_candidates(control: dict[str, Any], ranking: dict[str, Any]) -> dict[str, Any]:
-        """Reconstruye hechos desde Bronze local y luego calcula el Silver."""
+        """Normaliza en bloques confirmados y luego reconstruye TODO el historial."""
 
+        staging_directory = STAGING_DIR / f"extraction={control['extraction_id']}"
+        fingerprint_paths = [
+            Path(control["bronze_index_candidate_path"]),
+            Path(control["registry_candidate_path"]),
+            Path(ranking["ranking_index_candidate_path"]),
+            Path(__file__), Path(__file__).with_name("bo3_cs2_features.py"),
+            Path(__file__).with_name("bo3_cs2_rebuild.py"),
+            Path(__file__).with_name("bo3_cs2_quality.py"),
+        ]
+        fingerprint = build_fingerprint(fingerprint_paths, MATCH_FACT_COLUMNS, REBUILD_BATCH_SIZE)
+        store = CheckpointStore(staging_directory / "checkpoints", fingerprint, MATCH_FACT_COLUMNS)
+        log_memory(LOGGER, "inicio reconstruccion")
         index_document = read_json(Path(control["bronze_index_candidate_path"]), {"matches": {}}) or {}
-        bronze_index = index_document.get("matches", {})
+        indexed_items = sorted(
+            ((key, {field: entry.get(field) for field in (*ENDPOINT_KEYS, "slug")})
+             for key, entry in index_document.get("matches", {}).items()),
+            key=lambda item: int(item[0]),
+        )
+        del index_document
         registry_document = read_json(Path(control["registry_candidate_path"]), {"matches": {}}) or {}
-        registry = registry_document.get("matches", {})
-        ranking_document = read_json(Path(ranking["ranking_index_candidate_path"]), {"snapshots": {}}) or {}
-        ranking_payloads: list[dict[str, Any]] = []
-        current_official_dates = set(ranking_document.get("official_dates", []))
-        for ranking_date, snapshot in ranking_document.get("snapshots", {}).items():
-            if ranking_date not in current_official_dates:
-                continue
-            if not snapshot.get("is_official", True):
-                continue
-            for page_path in snapshot.get("pages", []):
-                payload = envelope_payload(page_path, {})
-                if isinstance(payload, dict):
-                    ranking_payloads.append(payload)
-        rankings_by_date = normalize_ranking_payloads(ranking_payloads)
+        lifecycle_states = {key: entry.get("lifecycle_state")
+                            for key, entry in registry_document.get("matches", {}).items()}
+        del registry_document
+        gc.collect()
+        log_memory(LOGGER, "indices compactados")
 
         def normalize_indexed(item: tuple[str, dict[str, Any]]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
             key, indexed = item
@@ -1272,74 +1348,200 @@ def bo3_cs2_ingest():
             assessment = assess_enrichment(detail, games, full_stats, short_stats, profiles)
             row = None
             normalization_issues: list[str] = []
-            if assessment["result_valid"]:
+            if match_result_valid(detail):
                 row, normalization_issues = build_match_row(
                     detail, games, full_stats, short_stats, profiles,
                     data_completeness=assessment["data_completeness"],
                     rank_extracted_at_utc=detail_document.get("fetched_at_utc"),
                 )
-            entry = registry.get(key, {})
+            lifecycle_state = lifecycle_states.get(key)
+            if assessment["quality_state"] == "excluded_forfeit":
+                lifecycle_state = "excluded_forfeit"
+            elif (assessment["quality_state"].startswith("quarantined")
+                  and not str(lifecycle_state or "").startswith("pending")):
+                lifecycle_state = "quarantined"
+            elif lifecycle_state in {"ready", "final_partial", "quarantined", "excluded_forfeit", None}:
+                lifecycle_state = "ready" if assessment["data_completeness"] == "complete" else "final_partial"
             if row is not None:
                 row.update({
-                    "lifecycle_state": entry.get("lifecycle_state"),
+                    "lifecycle_state": lifecycle_state,
                     "quality_issues": ";".join(assessment["issues"]) or None,
                     "normalization_issues": ";".join(normalization_issues) or None,
                 })
             quality = {
                 "match_id": int(key), "slug": indexed.get("slug"),
                 "source_status": detail.get("status"), "parsed_status": detail.get("parsed_status"),
-                "lifecycle_state": entry.get("lifecycle_state"), **assessment,
+                "lifecycle_state": lifecycle_state, **assessment,
                 "normalization_issues": normalization_issues,
             }
             return row, quality
 
-        facts: list[dict[str, Any]] = []
-        quality_rows: list[dict[str, Any]] = []
-        indexed_items = list(bronze_index.items())
         worker_count = min(CONTROL_IO_WORKERS, max(1, len(indexed_items)))
+        reused_blocks = 0
+        block_ids = []
+        LOGGER.info("Reconstruccion: %s workers; checkpoints de %s partidos", worker_count, REBUILD_BATCH_SIZE)
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="facts-io") as executor:
+            def parallel_signature(items):
+                # stat sobre un montaje Windows tambien es I/O: verificarlo
+                # con los mismos workers, no con miles de consultas en serie.
+                return [entry for group in executor.map(source_signature, ([item] for item in items))
+                        for entry in group]
             processed = 0
-            for item_batch in split_batches(indexed_items, 1000):
-                futures = [executor.submit(normalize_indexed, item) for item in item_batch]
-                for future in as_completed(futures):
-                    row, quality = future.result()
-                    if row is not None:
-                        facts.append(row)
-                    quality_rows.append(quality)
-                    processed += 1
+            for number, offset in enumerate(range(0, len(indexed_items), REBUILD_BATCH_SIZE), 1):
+                item_batch = indexed_items[offset:offset + REBUILD_BATCH_SIZE]
+                ids = [int(key) for key, _ in item_batch]
+                sources = parallel_signature(item_batch)
+                records = store.load(number, ids, sources)
+                if records is None:
+                    # Ocho lecturas en paralelo. Nunca acumular el dataset completo
+                    # ni conservar futures/resultados de bloques anteriores.
+                    pending = {executor.submit(normalize_indexed, item) for item in item_batch}
+                    records = []
+                    try:
+                        for future in as_completed(pending):
+                            records.append(future.result())
+                            pending.remove(future)
+                        del future
+                    except BaseException:
+                        for future in pending:
+                            future.cancel()
+                        raise
+                    records.sort(key=lambda value: value[1]["match_id"])
+                    if parallel_signature(item_batch) != sources:
+                        raise RuntimeError("Bronze cambio durante la lectura; no se confirma el bloque.")
+                    store.save(number, ids, sources, records)
+                    action = "calculado"
+                else:
+                    reused_blocks += 1
+                    action = "reutilizado"
+                block_ids.append(ids)
+                processed += len(ids)
+                del records, sources, item_batch
                 LOGGER.info(
-                    "Intermediate: %s/%s partidos leidos desde Bronze", processed, len(indexed_items)
+                    "Intermediate: %s/%s partidos; checkpoint %s %s y completo",
+                    processed, len(indexed_items), number, action,
                 )
+                log_memory(LOGGER, f"bloque {number}")
+        indexed_count = len(indexed_items)
+        del indexed_items, lifecycle_states
+        gc.collect()
+        log_memory(LOGGER, "normalizacion completa; carga de rankings")
 
-        if not facts:
-            raise RuntimeError("No se pudo reconstruir ningun hecho valido desde Bronze.")
-        facts = attach_historical_rankings(facts, rankings_by_date)
-        facts.sort(key=lambda value: (value.get("start_at_utc") or "", int(value["match_id"])))
-        quality_rows.sort(key=lambda value: int(value["match_id"]))
-        silver_rows = build_point_in_time_silver(facts)
+        ranking_document = read_json(Path(ranking["ranking_index_candidate_path"]), {"snapshots": {}}) or {}
+        def ranking_payloads():
+            official_dates = set(ranking_document.get("official_dates", []))
+            for date, snapshot in ranking_document.get("snapshots", {}).items():
+                if date in official_dates and snapshot.get("is_official", True):
+                    for path in snapshot.get("pages", []):
+                        payload = envelope_payload(path, {})
+                        if isinstance(payload, dict):
+                            yield payload
+        rankings_by_date = normalize_ranking_payloads(ranking_payloads())
+        del ranking_document
 
-        staging_directory = STAGING_DIR / f"extraction={control['extraction_id']}"
         facts_candidate_path = staging_directory / "match_facts_candidate.csv"
         silver_candidate_path = staging_directory / "matches_silver_candidate.csv"
         match_quality_candidate_path = staging_directory / "match_quality.jsonl"
-        write_dataframe_csv_atomic(
-            facts_candidate_path, pd.DataFrame(facts, columns=MATCH_FACT_COLUMNS)
+        cs2_facts: list[dict[str, Any]] = []
+        quality_count = 0
+        # Cada checkpoint se valida completo antes de consumir sus registros.
+        # La tabla de apoyo queda ordenada por match_id; Silver ordena por tiempo.
+        with atomic_text_writer(match_quality_candidate_path) as quality_stream:
+            def fact_rows():
+                nonlocal quality_count
+                for number, ids in enumerate(block_ids, 1):
+                    records = store.load(number, ids)
+                    if records is None:
+                        raise RuntimeError(f"Checkpoint {number} invalido durante el ensamblado.")
+                    ranked = attach_historical_rankings(
+                        (row for row, _ in records if row is not None), rankings_by_date
+                    )
+                    for _, quality in records:
+                        quality_stream.write(json.dumps(quality, ensure_ascii=False) + "\n")
+                        quality_count += 1
+                    del records
+                    for row in ranked:
+                        if is_eligible_cs2_fact(row):
+                            cs2_facts.append(row)
+                        yield row
+            facts_count = write_csv_rows_atomic(facts_candidate_path, fact_rows(), MATCH_FACT_COLUMNS)
+        if not facts_count:
+            raise RuntimeError("No se pudo reconstruir ningun hecho valido desde Bronze.")
+        if quality_count != indexed_count:
+            raise RuntimeError("Faltan partidos en el informe de calidad; no se publica.")
+        del rankings_by_date
+        gc.collect()
+        log_memory(LOGGER, "inicio historial CS2 completo")
+        silver_count = write_csv_rows_atomic(
+            silver_candidate_path, iter_point_in_time_silver(cs2_facts), SILVER_COLUMNS
         )
-        write_dataframe_csv_atomic(
-            silver_candidate_path, pd.DataFrame(silver_rows, columns=SILVER_COLUMNS)
+        if silver_count != len(cs2_facts):
+            raise RuntimeError("Faltan filas en Silver; no se publica.")
+        del cs2_facts
+        gc.collect()
+        # Reconciliar controles antiguos desde la auditoria nueva sin modificar
+        # el candidato usado para el fingerprint ni los controles publicados.
+        # Se confirma esta version solamente en finalize_run.
+        reconciled_registry = read_json(Path(control["registry_candidate_path"]), {"matches": {}}) or {}
+        entries = reconciled_registry.setdefault("matches", {})
+        with match_quality_candidate_path.open(encoding="utf-8") as stream:
+            for line in stream:
+                quality = json.loads(line)
+                entry = entries.setdefault(str(quality["match_id"]), {"match_id": quality["match_id"]})
+                entry.update({
+                    "quality_policy_version": QUALITY_POLICY_VERSION,
+                    "quality_state": quality["quality_state"],
+                    "lifecycle_state": quality["lifecycle_state"],
+                    "data_completeness": quality["data_completeness"],
+                    "quality_issues": sorted(set(quality["issues"] + quality["normalization_issues"])),
+                })
+                if entry["lifecycle_state"] in {"ready", "final_partial", "quarantined", "excluded_forfeit"}:
+                    entry["next_retry_at_utc"] = None
+        reconciled_registry_path = staging_directory / "control" / "match_registry_validated.json"
+        reconciled_quarantine_path = staging_directory / "control" / "quarantine_validated.jsonl"
+        write_json_atomic(reconciled_registry_path, reconciled_registry)
+        write_jsonl_atomic(reconciled_quarantine_path, (
+            {"match_id": entry.get("match_id"), "slug": entry.get("slug"),
+             "quality_state": entry.get("quality_state"), "reason": entry.get("quality_issues", [])}
+            for entry in entries.values() if str(entry.get("quality_state", "")).startswith("quarantined")
+        ))
+        del entries, reconciled_registry
+        LOGGER.info(
+            "Silver CS2: %s filas de %s hechos; CS:GO y version desconocida "
+            "se conservan en Intermediate pero no alimentan historiales",
+            silver_count, facts_count,
         )
-        write_jsonl_atomic(match_quality_candidate_path, quality_rows)
+        if build_fingerprint(fingerprint_paths, MATCH_FACT_COLUMNS, REBUILD_BATCH_SIZE) != fingerprint:
+            raise RuntimeError("Codigo o controles cambiaron durante el calculo; no se publica.")
+        seal_path = staging_directory / "rebuild_complete.json"
+        write_json_atomic(seal_path, {
+            "fingerprint": fingerprint, "indexed_matches": indexed_count,
+            "facts_rows": facts_count, "silver_rows": silver_count,
+            "quality_rows": quality_count, "blocks": len(block_ids),
+            "reused_blocks": reused_blocks,
+            "files": {str(path): file_sha256(path) for path in (
+                facts_candidate_path, silver_candidate_path, match_quality_candidate_path,
+                reconciled_registry_path, reconciled_quarantine_path,
+            )},
+        })
+        log_memory(LOGGER, "candidatos completos")
         return {
             **control, **ranking,
+            "registry_candidate_path": str(reconciled_registry_path),
+            "quarantine_candidate_path": str(reconciled_quarantine_path),
             "facts_candidate_path": str(facts_candidate_path),
             "silver_candidate_path": str(silver_candidate_path),
             "match_quality_candidate_path": str(match_quality_candidate_path),
-            "facts_rows": len(facts), "facts_columns": len(MATCH_FACT_COLUMNS),
-            "rows": len(silver_rows), "columns": len(SILVER_COLUMNS),
+            "facts_rows": facts_count, "facts_columns": len(MATCH_FACT_COLUMNS),
+            "rows": silver_count, "columns": len(SILVER_COLUMNS),
+            "rebuild_complete_path": str(seal_path), "rebuild_fingerprint": fingerprint,
+            "rebuild_blocks": len(block_ids), "rebuild_blocks_reused": reused_blocks,
         }
 
     @task
     def validate_and_report(transformation: dict[str, Any]) -> dict[str, Any]:
+        verify_rebuild_seal(transformation)
+        log_memory(LOGGER, "inicio validacion")
         facts = pd.read_csv(transformation["facts_candidate_path"], low_memory=False)
         silver = pd.read_csv(transformation["silver_candidate_path"], low_memory=False)
         duplicate_fact_ids = int(facts["match_id"].duplicated().sum())
@@ -1349,10 +1551,23 @@ def bo3_cs2_ingest():
             (facts["winner_team_id"] == facts["team_a_id"])
             | (facts["winner_team_id"] == facts["team_b_id"])
         ).all()
-        expected_silver_rows = int(facts["start_at_utc"].notna().sum())
+        eligible_facts = facts.loc[
+            facts.apply(lambda row: is_eligible_cs2_fact(row.to_dict()), axis=1)
+        ]
+        expected_silver_rows = len(eligible_facts)
+        expected_ids = set(eligible_facts["match_id"])
+        # Comparar por clave, no por orden; tambien preservar los nulos.
+        metadata_preserved = False
+        if duplicate_fact_ids == 0 and duplicate_silver_ids == 0 and set(silver["match_id"]) == expected_ids:
+            expected_metadata = eligible_facts.set_index("match_id")[POST_MATCH_METADATA_COLUMNS].sort_index()
+            actual_metadata = silver.set_index("match_id")[POST_MATCH_METADATA_COLUMNS].sort_index()
+            metadata_preserved = bool((
+                expected_metadata.eq(actual_metadata)
+                | (expected_metadata.isna() & actual_metadata.isna())
+            ).all().all())
         ranking_ages = pd.to_numeric(silver["ranking_age_days"], errors="coerce").dropna()
         forbidden_columns = {
-            "end_at_utc", "duration_seconds", "winner_team_id", "loser_team_id",
+            "duration_seconds", "winner_team_id", "loser_team_id",
             "parsed_status", "data_completeness", "lifecycle_state",
         }
         minimum_rules = {
@@ -1365,6 +1580,21 @@ def bo3_cs2_ingest():
             not silver.loc[pd.to_numeric(silver[count], errors="coerce") < 5, value].notna().any()
             for value, count in minimum_rules.items()
         )
+        # Controles sobre valores publicados, no solo sobre flags de entrada.
+        score_a = pd.to_numeric(silver["post_team_a_maps_won"], errors="coerce")
+        score_b = pd.to_numeric(silver["post_team_b_maps_won"], errors="coerce")
+        published_scores_valid = bool((score_a.notna() & score_b.notna() & score_a.ne(score_b)
+            & score_a.ge(0) & score_b.ge(0) & score_a.mod(1).eq(0) & score_b.mod(1).eq(0)
+            & score_a.gt(score_b).eq(silver["target_team_a_won"].eq(1))).all())
+        start_dates = pd.to_datetime(silver["start_at_utc"], utc=True, format="mixed", errors="coerce")
+        end_dates = pd.to_datetime(silver["end_at_utc"], utc=True, format="mixed", errors="coerce")
+        blocked = facts["statistics_blocked"].fillna(True).astype(bool)
+        blocked_families_safe = all(
+            not facts.loc[blocked, f"team_{side}_{suffix}"].fillna(False).astype(bool).any()
+            for side in ("a", "b") for suffix in (
+                "rating_valid", "adr_valid", "kast_valid", "mechanical_totals_valid", "lineup_valid"
+            )
+        )
         checks = {
             "facts_schema_exact": list(facts.columns) == MATCH_FACT_COLUMNS,
             "silver_schema_exact": list(silver.columns) == SILVER_COLUMNS,
@@ -1373,14 +1603,26 @@ def bo3_cs2_ingest():
             "facts_primary_key_unique": duplicate_fact_ids == 0,
             "silver_primary_key_unique": duplicate_silver_ids == 0,
             "one_silver_row_per_eligible_fact": len(silver) == expected_silver_rows,
+            "silver_matches_cs2_population": set(silver["match_id"]) == expected_ids,
+            "silver_only_cs2": bool(pd.to_numeric(silver["game_version"], errors="coerce").eq(CS2_GAME_VERSION).all()),
+            "post_match_metadata_preserved": metadata_preserved,
             "teams_are_distinct": bool((silver["team_a_id"] != silver["team_b_id"]).all()),
             "winner_is_participant": bool(winner_valid),
             "binary_target": target_values.issubset({0, 1}) and bool(target_values),
             "target_not_null": not silver["target_team_a_won"].isna().any(),
-            "no_post_columns_in_silver": not any(column.startswith("post_") for column in silver.columns),
+            "only_allowed_post_columns_in_silver": all(
+                not column.startswith("post_") or column in POST_MATCH_METADATA_COLUMNS
+                for column in silver.columns
+            ),
             "no_forbidden_result_metadata": forbidden_columns.isdisjoint(silver.columns),
             "historical_ranking_strictly_prior": bool((ranking_ages >= 1).all()),
             "minimum_observations_enforced": insufficient_values_are_null,
+            "series_scores_agree_with_target": published_scores_valid,
+            "silver_start_times_valid": bool(eligible_facts["start_time_valid"].all()),
+            "silver_no_temporal_or_result_quarantine": bool(eligible_facts["quality_state"].str.startswith("eligible_").all()),
+            "end_not_before_start": bool((end_dates.isna() | end_dates.ge(start_dates)).all()),
+            "blocked_statistics_do_not_feed_history": blocked_families_safe,
+            "round_statistics_require_valid_maps": not bool((facts["round_scores_valid"] & ~facts["map_stats_valid"]).any()),
         }
         errors = [name for name, passed in checks.items() if not passed]
         registry = (
@@ -1393,6 +1635,16 @@ def bo3_cs2_ingest():
             "intermediate_rows": len(facts), "intermediate_columns": len(facts.columns),
             "silver_rows": len(silver), "silver_columns": len(silver.columns),
             "primary_key": "match_id", "target": "target_team_a_won",
+            "population_policy": "game_version=2 for both Silver rows and historical features",
+            "quality_policy_version": QUALITY_POLICY_VERSION,
+            "quality_state_distribution": dict(Counter(value.get("quality_state", "unknown") for value in registry.values())),
+            "facts_game_version_distribution": {
+                str(key): int(value)
+                for key, value in facts["game_version"].value_counts(dropna=False).items()
+            },
+            "facts_excluded_from_silver": len(facts) - expected_silver_rows,
+            "post_match_metadata_columns": POST_MATCH_METADATA_COLUMNS,
+            "predictor_excluded_columns": PREDICTOR_EXCLUDED_COLUMNS,
             "duplicate_intermediate_match_ids": duplicate_fact_ids,
             "duplicate_silver_match_ids": duplicate_silver_ids,
             "target_distribution": {
@@ -1414,6 +1666,8 @@ def bo3_cs2_ingest():
             },
             "ranking_snapshots_downloaded": transformation["ranking_snapshots_downloaded"],
             "ranking_snapshots_reused": transformation["ranking_snapshots_reused"],
+            "rebuild_blocks": transformation.get("rebuild_blocks"),
+            "rebuild_blocks_reused": transformation.get("rebuild_blocks_reused"),
             "checks": checks, "errors": errors,
         }
         report_directory = STAGING_DIR / f"extraction={transformation['extraction_id']}" / "quality"
@@ -1425,6 +1679,7 @@ def bo3_cs2_ingest():
 
     @task
     def publish_dataset(validation: dict[str, Any]) -> dict[str, Any]:
+        verify_rebuild_seal(validation)
         extraction_id = validation["extraction_id"]
         intermediate_version_directory = INTERMEDIATE_DIR / f"extraction={extraction_id}"
         silver_version_directory = SILVER_DIR / f"extraction={extraction_id}"
@@ -1439,7 +1694,7 @@ def bo3_cs2_ingest():
         copy_file_atomic(Path(validation["match_quality_candidate_path"]), match_quality_path)
 
         facts_metadata = {
-            "dataset": "Bo3.gg CS2 match facts (support table)",
+            "dataset": "Bo3.gg match facts (support table; mixed game versions retained)",
             "unit_of_analysis": "one finished competitive match between two teams",
             "primary_key": "match_id", "target": "target_team_a_won",
             "extraction_id": extraction_id, "airflow_run_id": validation["airflow_run_id"],
@@ -1447,6 +1702,7 @@ def bo3_cs2_ingest():
             "published_at_utc": iso_utc(), "quality_report_path": str(quality_report_path),
             "notes": [
                 "support table; it is not the analytical Silver",
+                "CS:GO and unknown game versions remain here but never feed CS2 Silver histories",
                 "post_* fields describe the observed match and never enter the same match as predictors",
                 "validity flags decide which feature families each partial match can feed",
             ],
@@ -1457,12 +1713,23 @@ def bo3_cs2_ingest():
             "primary_key": "match_id", "target": "target_team_a_won",
             "extraction_id": extraction_id, "airflow_run_id": validation["airflow_run_id"],
             "rows": validation["rows"], "columns": validation["columns"],
+            "schema_version": "cs2_only_with_result_metadata_v3",
+            "quality_policy_version": QUALITY_POLICY_VERSION,
+            "population_game_version": CS2_GAME_VERSION,
+            "history_game_version": CS2_GAME_VERSION,
+            "post_match_metadata_columns": POST_MATCH_METADATA_COLUMNS,
+            "predictor_excluded_columns": PREDICTOR_EXCLUDED_COLUMNS,
             "published_at_utc": iso_utc(), "quality_report_path": str(quality_report_path),
             "notes": [
                 "all historical features use matches with end_at_utc strictly before start_at_utc",
+                "only game_version=2 enters Silver or updates any historical feature, including Elo",
+                "end_at_utc and post_team_*_maps_won describe the current result; exclude them and the target from model inputs",
                 "official ranking snapshot is strictly earlier than the match calendar date",
                 "rolling performance values require five valid observations; coverage counters remain published",
                 "missing observations stay null and are never imputed as zero",
+                "unverified series results and conflicting chronology are excluded before all histories",
+                "series scores come from validated match_detail; invalid map statistics cannot feed performance features",
+                "missing end time never replaced by an estimate or ingestion timestamp",
             ],
         }
         write_json_atomic(intermediate_version_directory / "metadata.json", facts_metadata)

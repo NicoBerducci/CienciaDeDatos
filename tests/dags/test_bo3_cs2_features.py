@@ -1,8 +1,13 @@
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 
 from dags.bo3_cs2_features import (
+    POST_MATCH_METADATA_COLUMNS,
+    PREDICTOR_EXCLUDED_COLUMNS,
+    SILVER_COLUMNS,
     attach_historical_rankings,
     build_point_in_time_silver,
+    iter_point_in_time_silver,
     parse_official_ranking_dates,
 )
 
@@ -10,6 +15,7 @@ from dags.bo3_cs2_features import (
 def _fact(match_id, start, end, winner_a=1, *, stats_valid=True):
     return {
         "match_id": match_id,
+        "game_version": 2,
         "match_slug": f"match-{match_id}",
         "start_at_utc": start.isoformat(),
         "end_at_utc": end.isoformat() if end else None,
@@ -109,3 +115,69 @@ def test_official_dates_parser_accepts_strings_and_objects():
     assert parse_official_ranking_dates({"data": ["2026-01-01", {"ranking_date": "2026-02-01"}]}) == [
         "2026-01-01", "2026-02-01"
     ]
+
+
+def test_non_cs2_matches_do_not_change_any_cs2_feature():
+    origin = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cs2 = [
+        _fact(i, origin + timedelta(days=i), origin + timedelta(days=i, hours=2))
+        for i in range(1, 9)
+    ]
+    excluded = []
+    for i, version in enumerate((1, None, "", 3, float("nan"), "unknown"), start=100):
+        fact = _fact(i, origin, origin + timedelta(hours=1), winner_a=0)
+        fact["game_version"] = version
+        excluded.append(fact)
+    # Equality across every column covers Elo, H2H, counts, rest and all windows.
+    assert build_point_in_time_silver(excluded + cs2) == build_point_in_time_silver(cs2)
+    assert build_point_in_time_silver(excluded) == []
+
+
+def test_cs2_version_accepts_numeric_serializations_not_missing_version():
+    origin = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for version in (2, 2.0, "2", "2.0"):
+        fact = _fact(1, origin, origin + timedelta(hours=2))
+        fact["game_version"] = version
+        assert len(build_point_in_time_silver([fact])) == 1
+    del fact["game_version"]
+    assert build_point_in_time_silver([fact]) == []
+
+
+def test_result_metadata_is_preserved_but_current_result_does_not_change_features():
+    origin = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    prior = _fact(1, origin, origin + timedelta(hours=2))
+    current = _fact(2, origin + timedelta(days=1), origin + timedelta(days=1, hours=2))
+    row = build_point_in_time_silver([prior, current])[-1]
+    assert list(row) == SILVER_COLUMNS
+    assert len(SILVER_COLUMNS) == 113
+    for column in POST_MATCH_METADATA_COLUMNS:
+        assert row[column] == current[column]
+        assert column in PREDICTOR_EXCLUDED_COLUMNS
+    modified = dict(current, target_team_a_won=0, post_team_a_maps_won=0,
+                    post_team_b_maps_won=2, end_at_utc=None, end_time_valid=False)
+    changed_row = build_point_in_time_silver([prior, modified])[-1]
+    for column in SILVER_COLUMNS:
+        if column not in PREDICTOR_EXCLUDED_COLUMNS:
+            assert changed_row[column] == row[column]
+
+
+def test_missing_result_metadata_stays_null_without_dropping_match():
+    origin = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fact = _fact(1, origin, None)
+    fact.update(post_team_a_maps_won=None, post_team_b_maps_won=None, maps_valid=False)
+    row = build_point_in_time_silver([fact])[0]
+    assert all(row[column] is None for column in POST_MATCH_METADATA_COLUMNS)
+
+
+def test_streamed_silver_does_not_mutate_input_and_keeps_time_order():
+    origin = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    first = _fact(9, origin, origin + timedelta(hours=2))
+    second = _fact(1, origin + timedelta(days=1), origin + timedelta(days=1, hours=2))
+    facts = [second, first]
+    original = deepcopy(facts)
+    rows = list(iter_point_in_time_silver(facts))
+    assert facts == original
+    assert [row["match_id"] for row in rows] == [9, 1]
+    assert [row["team_a_matches_prior"] for row in rows] == [0, 1]
+    assert rows[0]["team_a_elo"] == 1500
+    assert rows[1]["team_a_elo"] == 1516

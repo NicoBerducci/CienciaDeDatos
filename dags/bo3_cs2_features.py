@@ -9,12 +9,15 @@ from __future__ import annotations
 from bisect import bisect_left
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 
 INITIAL_ELO = 1500.0
 ELO_K_FACTOR = 32.0
 MIN_ROLLING_OBSERVATIONS = 5
+# Codigo observado en Bo3.gg: 1 = CS:GO, 2 = CS2. Una fecha reciente no
+# reemplaza la identificacion de version; los valores desconocidos se excluyen.
+CS2_GAME_VERSION = 2
 
 
 IDENTITY_COLUMNS = [
@@ -60,8 +63,15 @@ ADVANTAGE_COLUMNS = [
     "rest_days_advantage_a", "lineup_stability_last5_advantage_a",
 ]
 
+# Se conservan para describir el partido, nunca como entradas del modelo.
+POST_MATCH_METADATA_COLUMNS = [
+    "end_at_utc", "post_team_a_maps_won", "post_team_b_maps_won",
+]
+PREDICTOR_EXCLUDED_COLUMNS = POST_MATCH_METADATA_COLUMNS + ["target_team_a_won"]
+
 SILVER_COLUMNS = (
     IDENTITY_COLUMNS
+    + POST_MATCH_METADATA_COLUMNS
     + RANKING_COLUMNS
     + [f"team_{side}_{suffix}" for side in ("a", "b") for suffix in TEAM_FEATURE_SUFFIXES]
     + ["h2h_team_a_winrate_last5", "h2h_last5_count"]
@@ -102,6 +112,17 @@ def as_bool(value: Any) -> bool:
             return False
         return bool(value)
     return str(value or "").strip().casefold() in {"1", "true", "yes", "si", "sí"}
+
+
+def is_eligible_cs2_fact(fact: dict[str, Any]) -> bool:
+    """Misma poblacion para filas de Silver y para todos sus historiales."""
+
+    return (
+        as_float(fact.get("game_version")) == CS2_GAME_VERSION
+        and parse_datetime(fact.get("start_at_utc")) is not None
+        and as_bool(fact.get("result_valid", True))
+        and as_bool(fact.get("start_time_valid", True))
+    )
 
 
 def parse_official_ranking_dates(payload: Any) -> list[str]:
@@ -343,12 +364,16 @@ def _difference(left: Any, right: Any) -> float | None:
     return left_number - right_number if left_number is not None and right_number is not None else None
 
 
-def build_point_in_time_silver(facts: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Calcula features usando exclusivamente partidos terminados antes del actual."""
+def iter_point_in_time_silver(facts: Iterable[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    """Filtra CS2 antes de calcular features con partidos previos terminados.
+
+    Los metadatos pospartido se copian por separado y no alimentan las features
+    de su propia fila. Los hechos excluidos no actualizan ni Elo ni historiales.
+    """
 
     eligible = [
-        dict(fact) for fact in facts
-        if parse_datetime(fact.get("start_at_utc")) is not None and as_bool(fact.get("result_valid", True))
+        fact for fact in facts
+        if is_eligible_cs2_fact(fact)
     ]
     eligible.sort(key=lambda fact: (parse_datetime(fact["start_at_utc"]), int(fact["match_id"])))
     completed = sorted(
@@ -360,7 +385,6 @@ def build_point_in_time_silver(facts: Iterable[dict[str, Any]]) -> list[dict[str
     elo: dict[int, float] = defaultdict(lambda: INITIAL_ELO)
     h2h: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
     completed_position = 0
-    output: list[dict[str, Any]] = []
 
     def add_completed(fact: dict[str, Any]) -> None:
         team_a, team_b = int(fact["team_a_id"]), int(fact["team_b_id"])
@@ -393,6 +417,7 @@ def build_point_in_time_silver(facts: Iterable[dict[str, Any]]) -> list[dict[str
             histories[team_b], start=start, bo_type=fact.get("bo_type"), tier=fact.get("tier"), elo=elo[team_b]
         )
         row = {column: fact.get(column) for column in IDENTITY_COLUMNS}
+        row.update({column: fact.get(column) for column in POST_MATCH_METADATA_COLUMNS})
         row.update({column: fact.get(column) for column in RANKING_COLUMNS})
         row["rank_advantage_a"] = _difference(fact.get("team_b_rank"), fact.get("team_a_rank"))
         row["ranking_score_advantage_a"] = _difference(
@@ -426,5 +451,9 @@ def build_point_in_time_silver(facts: Iterable[dict[str, Any]]) -> list[dict[str
         }
         for output_name, source_name in comparison_sources.items():
             row[output_name] = _difference(features_a.get(source_name), features_b.get(source_name))
-        output.append({column: row.get(column) for column in SILVER_COLUMNS})
-    return output
+        yield {column: row.get(column) for column in SILVER_COLUMNS}
+
+
+def build_point_in_time_silver(facts: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """API de compatibilidad para notebooks/pruebas; el DAG escribe en streaming."""
+    return list(iter_point_in_time_silver(facts))
