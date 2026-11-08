@@ -1,0 +1,13 @@
+# Mismas versiones que la Entrega 3 (los números del notebook y de la app dependen de ellas)
+numpy==2.1.3
+pandas==2.2.3
+scikit-learn==1.6.1
+scipy==1.14.1
+# Gráficos y construcción de la app
+altair==5.5.0
+vl-convert-python==1.9.0.post1
+matplotlib>=3.8
+# Para correr el notebook y bajar los datos
+jupyter
+nbconvert
+gdown

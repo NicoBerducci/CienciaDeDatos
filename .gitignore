@@ -18,3 +18,9 @@ airflow.db
 **/.astro/manifest.slim.json
 /include/output/
 /tmp/
+
+# Entregas 3 y 4 (modelo y aplicación)
+/datos/*.csv
+app/resultados/
+**/__pycache__/
+.ipynb_checkpoints/
