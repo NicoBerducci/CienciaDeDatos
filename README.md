@@ -1,3 +1,23 @@
+# ¿Quién gana la serie? · Predicción de partidos de Counter-Strike 2
+
+**Ciencia de Datos · UTN FRM · 2026 · Comisión 5K10 · Grupo 07**
+Berducci Nicolás · Genaulaz Martin · Yanardi Tomás · Yanardi Juan Cruz · Gallardo Federico · León Mario
+
+> Con lo que se sabe antes de empezar, el modelo elige al ganador del **65,1 %** de las series de CS2 que nunca vio, y cuando se equivoca, **8 de cada 10 veces** es porque ganó el equipo que llegaba con menos Elo.
+
+**Aplicación:** https://nicoberducci.github.io/CienciaDeDatos/ (GitHub Pages, carpeta `docs/`)
+
+| Entrega | Qué | Dónde |
+|---|---|---|
+| 1 y 2 | Pipeline de Airflow: Bo3.gg → Bronze → Intermediate → Silver (política de calidad v3, detallada abajo) | `dags/` |
+| 2 | EDA, cinco hipótesis y redundancia | `entrega 2/` |
+| 3 (corregida) | Modelado: cuatro familias con su grilla, logística final, dónde y por qué falla | `entrega 3/` |
+| 4 | La aplicación y cómo se genera | `app/` (código) y `docs/` (página publicada) |
+
+Cómo regenerar la aplicación y cómo llega el modelo al navegador: ver [`app/README.md`](app/README.md).
+
+---
+
 Overview
 ========
 

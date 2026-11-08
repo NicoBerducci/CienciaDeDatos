@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>¿Quién gana la serie? · CS2 · Grupo 07</title>
+<style>
+[[fuentes_css]]
+:root{
+  --fondo:#0b0e12;--fondo2:#0f1318;--panel:#151b23;--panel2:#1b222c;--linea:#2b3440;
+  --tinta:#e8ecf1;--gris:#9aa5b4;--suave:#566273;
+  --ct:#5b9cf0;--t:#f0b23e;--ok:#3ddc97;--err:#ff5a5f;--acento:#3fd2d8;
+  --hud:Rajdhani,"Arial Narrow","Segoe UI",sans-serif;--texto:Barlow,"Segoe UI",Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{margin:0;background:var(--fondo);color:var(--tinta);font:17.5px/1.6 var(--texto);
+  background-image:linear-gradient(rgba(91,156,240,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(91,156,240,.035) 1px,transparent 1px);
+  background-size:44px 44px}
+a{color:var(--acento)}
+b,strong{color:#fff;font-weight:600}
+code{font-size:.85em;background:#0b0e12;border:1px solid var(--linea);padding:1px 5px;border-radius:3px;color:#cfe3ff}
+
+/* ---------- HUD superior ---------- */
+.hud{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:22px;padding:10px 26px;
+  background:rgba(11,14,18,.92);backdrop-filter:blur(6px);border-bottom:1px solid var(--linea)}
+.marca{display:flex;align-items:center;gap:10px;font:700 17px/1 var(--hud);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+.marca svg{width:26px;height:26px}
+.marca small{display:block;font:500 11px/1.2 var(--texto);letter-spacing:.04em;color:var(--gris);text-transform:none;margin-top:3px}
+.rondas{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+.rondas a{font:600 13px/1 var(--hud);letter-spacing:.1em;text-transform:uppercase;color:var(--gris);text-decoration:none;
+  padding:8px 11px;border:1px solid var(--linea);background:var(--panel);clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px)}
+.rondas a span{color:var(--suave);margin-right:5px}
+.rondas a:hover{color:var(--tinta)}
+.rondas a.activo{color:#0b0e12;background:var(--acento);border-color:var(--acento)}
+.rondas a.activo span{color:#0b0e12}
+.rondas a.copa.activo{background:var(--t);border-color:var(--t)}
+.rondas .sep{width:1px;background:var(--linea);margin:0 6px}
+.marcador{display:flex;align-items:center;gap:8px;font:700 22px/1 var(--hud);white-space:nowrap}
+.marcador .ok{color:var(--ok)} .marcador .err{color:var(--err)}
+.marcador i{font:600 10px/1.15 var(--hud);font-style:normal;letter-spacing:.1em;color:var(--gris);text-align:center;text-transform:uppercase}
+
+main{max-width:1120px;margin:0 auto;padding:0 28px 60px}
+section{padding:64px 0 30px;position:relative}
+.etiqueta{display:flex;align-items:center;gap:12px;margin:0 0 14px;font:700 14px/1 var(--hud);letter-spacing:.16em;text-transform:uppercase}
+.etiqueta .num{color:#0b0e12;background:var(--acento);padding:5px 9px 4px;clip-path:polygon(0 0,calc(100% - 8px) 0,100% 50%,calc(100% - 8px) 100%,0 100%)}
+.etiqueta .nombre{color:var(--acento)}
+.etiqueta::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--linea),transparent)}
+.copa .etiqueta .num{background:var(--t)} .copa .etiqueta .nombre{color:var(--t)}
+h1,h2,h3{font-family:var(--hud);font-weight:700;letter-spacing:.01em;line-height:1.1}
+h1{font-size:76px;margin:0 0 6px;text-transform:uppercase;letter-spacing:.02em}
+h2{font-size:36px;margin:0 0 16px;max-width:42ch}
+h3.sub{font-size:25px;margin:40px 0 4px;max-width:44ch}
+p,li{max-width:76ch}
+.nota{font-size:14.5px;color:var(--gris)}
+.mirar{font-size:15.5px;color:#c9d2dd;background:linear-gradient(90deg,rgba(63,210,216,.09),transparent);border-left:3px solid var(--acento);padding:9px 14px;margin:8px 0 14px;max-width:80ch}
+.mirar b{color:var(--acento);font-family:var(--hud);letter-spacing:.08em;text-transform:uppercase;font-size:14px;margin-right:4px}
+.grafico{margin:20px 0 10px;overflow-x:auto;background:#0f1318;border:1px solid var(--linea);padding:12px;
+  clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px))}
+.esquinas{position:relative}
+
+/* ---------- Portada ---------- */
+#portada{padding-top:70px;min-height:calc(100vh - 60px)}
+#portada::before{content:"";position:absolute;inset:-30px -400px auto auto;width:760px;height:760px;pointer-events:none;
+  background:radial-gradient(closest-side,rgba(63,210,216,.10),transparent 70%)}
+.mira-grande{position:absolute;right:10px;top:70px;width:300px;height:300px;opacity:.16;pointer-events:none}
+.sub-h1{font:600 26px/1.3 var(--hud);color:var(--gris);margin:0 0 22px;max-width:36ch}
+.lead{font-size:19px;color:#c3ccd7;max-width:66ch}
+.briefing{position:relative;margin:30px 0 30px;padding:20px 24px 20px 26px;background:linear-gradient(90deg,rgba(91,156,240,.14),rgba(21,27,35,.6));
+  border-left:4px solid var(--ct);max-width:860px}
+.briefing .rotulo{font:700 12px/1 var(--hud);letter-spacing:.2em;color:var(--ct);text-transform:uppercase;margin:0 0 8px}
+.briefing p{font:600 26px/1.35 var(--hud);margin:0;color:#fff;max-width:none}
+.nums{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:8px 0 20px}
+.num{background:var(--panel);border:1px solid var(--linea);border-top:3px solid var(--acento);padding:16px 18px 14px;
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%)}
+.num:nth-child(2){border-top-color:var(--ok)} .num:nth-child(3){border-top-color:var(--err)}
+.num span{display:block;font:700 54px/1 var(--hud);color:#fff}
+.num p{margin:6px 0 0;font-size:14.5px;color:var(--gris);line-height:1.4}
+.num .tag{font:700 11px/1 var(--hud);letter-spacing:.16em;text-transform:uppercase;color:var(--gris);margin-bottom:8px;display:block}
+.barra-marcador{margin:26px 0 8px;max-width:860px}
+.barra-marcador .titulos{display:flex;justify-content:space-between;font:700 14px/1 var(--hud);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px}
+.barra-marcador .titulos .ok{color:var(--ok)} .barra-marcador .titulos .err{color:var(--err)}
+.barra{position:relative;height:16px;background:rgba(255,90,95,.75);clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%)}
+.barra .lleno{position:absolute;inset:0 auto 0 0;background:var(--ok)}
+.barra .piso{position:absolute;top:-6px;bottom:-6px;width:2px;background:#fff}
+.barra-marcador .leyenda{position:relative;height:22px;font-size:12.5px;color:var(--gris)}
+.barra-marcador .leyenda span{position:absolute;transform:translateX(-50%);white-space:nowrap;top:4px}
+
+/* ---------- Cómo lo sabemos ---------- */
+details{background:var(--panel);border:1px solid var(--linea);margin:20px 0;padding:0 22px}
+details[open]{padding-bottom:16px}
+summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:12px;padding:14px 0;
+  font:700 16px/1 var(--hud);letter-spacing:.14em;text-transform:uppercase;color:var(--acento)}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"";width:9px;height:9px;border-right:2px solid var(--acento);border-bottom:2px solid var(--acento);transform:rotate(-45deg);transition:transform .15s}
+details[open] summary::before{transform:rotate(45deg)}
+summary small{font:500 12px/1 var(--texto);letter-spacing:.02em;text-transform:none;color:var(--gris)}
+details h4{font:700 18px/1.2 var(--hud);letter-spacing:.05em;text-transform:uppercase;color:#fff;margin:22px 0 6px}
+details p,details li{font-size:15.5px;color:#c9d2dd}
+.tabla{overflow-x:auto;margin:8px 0 14px}
+table{border-collapse:collapse;font-size:14px;background:#0f1318}
+th,td{border:1px solid var(--linea);padding:6px 10px;text-align:left;vertical-align:top;color:#d4dbe4}
+th{background:#1b222c;font:700 13px/1.2 var(--hud);letter-spacing:.08em;text-transform:uppercase;color:var(--gris)}
+
+/* ---------- Kill feed ---------- */
+.killfeed{list-style:none;padding:0;margin:14px 0 8px;display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.killfeed li{display:flex;align-items:center;gap:10px;max-width:none;padding:7px 14px;background:rgba(0,0,0,.55);border:1px solid rgba(255,90,95,.55);
+  font:600 17px/1 var(--hud);letter-spacing:.02em}
+.killfeed .a{color:var(--ct)} .killfeed .b{color:var(--t)}
+.killfeed .cae{opacity:.9;text-decoration:line-through;text-decoration-color:rgba(255,90,95,.8)}
+.killfeed svg{width:18px;height:18px;flex:none}
+.killfeed .dato{font:400 13.5px/1.2 var(--texto);color:var(--gris);margin-left:6px}
+.killfeed .prob{color:var(--err)}
+
+/* ---------- Corte entre tallo y copa ---------- */
+.fin-serie{margin:50px 0 0;padding:34px 30px;text-align:center;border:1px solid var(--linea);
+  background:linear-gradient(90deg,rgba(91,156,240,.12),rgba(11,14,18,.4) 40%,rgba(11,14,18,.4) 60%,rgba(240,178,62,.12))}
+.fin-serie .grande{font:700 40px/1 var(--hud);letter-spacing:.14em;text-transform:uppercase}
+.fin-serie .grande .ct{color:var(--ct)} .fin-serie .grande .t{color:var(--t)}
+.fin-serie p{margin:10px auto 0;color:var(--gris);font-size:15.5px}
+
+/* ---------- Controles de Vega ---------- */
+.controles{display:flex;flex-wrap:wrap;gap:12px 26px;margin:18px 0 0;font-size:14.5px;padding:14px 18px;background:var(--panel);border:1px solid var(--linea)}
+.vega-bind{display:flex;align-items:center;gap:6px}
+.vega-bind-name{font:700 13.5px/1.1 var(--hud);letter-spacing:.08em;text-transform:uppercase;color:var(--gris)}
+select,.vega-bind select,.vega-bind input[type=search]{font:15px var(--texto);padding:5px 8px;background:#0b0e12;color:var(--tinta);border:1px solid var(--linea);border-radius:0;max-width:330px}
+.vega-bind-radio label{margin-right:10px;color:var(--tinta)}
+input[type=radio],input[type=checkbox]{accent-color:var(--acento)}
+input[type=range]{accent-color:var(--t)}
+
+/* ---------- Pick'em ---------- */
+.pickem{display:grid;grid-template-columns:1fr auto 1fr;gap:0;align-items:stretch;margin:18px 0 8px}
+.lado{padding:16px 18px;border:1px solid var(--linea);background:var(--panel)}
+.lado.ct{border-top:4px solid var(--ct);background:linear-gradient(180deg,rgba(91,156,240,.16),var(--panel) 70%)}
+.lado.t{border-top:4px solid var(--t);background:linear-gradient(180deg,rgba(240,178,62,.16),var(--panel) 70%)}
+.lado label{display:block;font:700 13px/1 var(--hud);letter-spacing:.16em;text-transform:uppercase;margin-bottom:8px}
+.lado.ct label{color:var(--ct)} .lado.t label{color:var(--t)}
+.lado select{width:100%;max-width:none;font-size:16px;padding:8px}
+.lado .rol{font-size:13px;color:var(--gris);margin-top:8px;min-height:1.2em}
+.pickem .vs{display:flex;align-items:center;justify-content:center;padding:0 20px;font:700 42px/1 var(--hud);color:#fff;
+  background:#0b0e12;border-top:1px solid var(--linea);border-bottom:1px solid var(--linea)}
+.acciones{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 4px}
+button{font:700 14px/1 var(--hud);letter-spacing:.1em;text-transform:uppercase;padding:10px 14px;cursor:pointer;color:var(--tinta);
+  background:var(--panel2);border:1px solid var(--linea)}
+button:hover{border-color:var(--acento);color:var(--acento)}
+#avisos{font-size:14px;color:var(--t);margin:6px 0 16px;min-height:1.2em}
+.probar{display:grid;grid-template-columns:minmax(0,1fr) 460px;gap:24px;align-items:start}
+.ficha{display:grid;gap:10px}
+fieldset{border:1px solid var(--linea);background:var(--panel);padding:8px 14px 10px;margin:0}
+legend{font:700 13px/1 var(--hud);letter-spacing:.16em;text-transform:uppercase;color:var(--acento);padding:0 6px}
+.slot{display:flex;flex-wrap:wrap;align-items:center;gap:0 12px}
+.slot .vega-bind{flex:1 1 380px;margin:3px 0}
+.slot .vega-bind:has(input[type=checkbox]){flex:0 0 auto}
+.slot .vega-bind label{display:grid;grid-template-columns:205px minmax(80px,1fr) 50px;align-items:center;gap:8px;font-size:13.5px;line-height:1.15;color:#c9d2dd}
+.slot .vega-bind-name{font:500 13.5px/1.2 var(--texto);letter-spacing:0;text-transform:none;color:#c9d2dd}
+.slot input[type=range]{width:100%;margin:0}
+.slot .vega-bind span:last-child{font:700 15px var(--hud);text-align:right;color:#fff}
+.slot .vega-bind label:has(input[type=checkbox]){display:flex;font-size:12.5px;color:var(--gris)}
+#d-contexto .vega-bind label{display:flex!important;gap:8px}
+.boleta{border:1px dashed rgba(240,178,62,.7);background:linear-gradient(180deg,rgba(240,178,62,.10),var(--panel))}
+.boleta legend{color:var(--t)}
+.fijo{position:sticky;top:84px}
+.chip{display:inline-block;width:11px;height:11px;margin-right:5px;vertical-align:baseline}
+footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);font-size:13.5px;border-top:1px solid var(--linea)}
+#vg-tooltip-element{font-family:var(--texto)!important;font-size:12.5px!important}
+@media (max-width:1180px){.probar{grid-template-columns:1fr}.fijo{position:static}.rondas{display:none}}
+@media (max-width:760px){.hud{padding:8px 14px}.marcador{display:none}main{padding:0 14px 50px}h1{font-size:48px}h2{font-size:28px}
+  .nums{grid-template-columns:1fr}.pickem{grid-template-columns:1fr}.pickem .vs{padding:8px}.slot .vega-bind label{grid-template-columns:150px 1fr 44px}.mira-grande{display:none}}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mira" viewBox="0 0 64 64"><g fill="none" stroke="currentColor" stroke-width="3">
+    <circle cx="32" cy="32" r="20"/><line x1="32" y1="2" x2="32" y2="20"/><line x1="32" y1="44" x2="32" y2="62"/>
+    <line x1="2" y1="32" x2="20" y2="32"/><line x1="44" y1="32" x2="62" y2="32"/></g><circle cx="32" cy="32" r="3" fill="currentColor"/></symbol>
+</svg>
+
+<header class="hud">
+  <div class="marca"><svg style="color:var(--acento)"><use href="#mira"/></svg>
+    <div>¿Quién gana la serie?<small>CS2 · Ciencia de Datos UTN FRM · 5K10 · Grupo 07</small></div></div>
+  <nav class="rondas">
+    <a href="#portada"><span>00</span>Briefing</a>
+    <a href="#datos"><span>01</span>Los datos</a>
+    <a href="#hallazgos"><span>02</span>Hallazgo</a>
+    <a href="#modelo"><span>03</span>El modelo</a>
+    <i class="sep"></i>
+    <a class="copa" href="#explora"><span>OT</span>Explorá</a>
+    <a class="copa" href="#proba"><span>OT</span>Pick'em</a>
+  </nav>
+  <div class="marcador" title="Series del test: aciertos y errores del modelo"><span class="ok">[[n_aciertos]]</span><i>aciertos<br>errores</i><span class="err">[[n_errores]]</span></div>
+</header>
+
+<main>
+
+<section id="portada">
+  <svg class="mira-grande" style="color:var(--acento)"><use href="#mira"/></svg>
+  <div class="etiqueta"><span class="num">00</span><span class="nombre">Briefing · el proyecto</span></div>
+  <h1>¿Quién gana la serie?</h1>
+  <p class="sub-h1">¿Se puede saber quién gana una serie de Counter-Strike 2 antes de que empiece?</p>
+  <p class="lead">Antes de cada serie profesional ya hay números: el Elo de cada equipo, su ranking, cómo viene jugando,
+  cuántos partidos lleva, si cambió jugadores, cómo le fue contra ese rival. Si el que llega mejor suele ganar,
+  esos números tendrían que anticipar el resultado. Los juntamos para [[n]] series y le preguntamos a un modelo.</p>
+  <div class="briefing"><p class="rotulo">La idea central</p>
+    <p>Con lo que se sabe antes de empezar, el modelo elige al ganador del [[acc_test]] de las series que nunca vio,
+    y cuando se equivoca, [[sorpresa_err_n]] de cada 10 veces es porque ganó el equipo que llegaba con menos Elo.</p></div>
+  <div class="nums">
+    <div class="num"><span class="tag">Acierto en el test</span><span>[[acc_test]]</span><p>de las [[n_test]] series que el modelo nunca vio, contra [[piso_test]] del piso que dice siempre «gana A»</p></div>
+    <div class="num"><span class="tag">Cuando está seguro</span><span>[[conf80]]</span><p>de aciertos cuando le da 80 % o más a un equipo ([[n80]] series)</p></div>
+    <div class="num"><span class="tag">Errores que son sorpresas</span><span>[[sorpresa_err]]</span><p>de los errores: ganó el que llegaba con menos Elo</p></div>
+  </div>
+  <div class="barra-marcador">
+    <div class="titulos"><span class="ok">Aciertos · [[n_aciertos]]</span><span class="err">[[n_errores]] · Errores</span></div>
+    <div class="barra"><div class="lleno" style="width:[[acc_test_css]]"></div><div class="piso" style="left:[[piso_test_css]]"></div></div>
+    <div class="leyenda"><span style="left:[[piso_test_css]]">▲ el piso: [[piso_test]]</span></div>
+  </div>
+  <p class="nota">Series profesionales de CS2 registradas en Bo3.gg, del [[desde]] al [[hasta]]. El test son las [[n_test]] series jugadas
+  desde el 01/03/2026: el modelo se eligió y se entrenó sin mirarlas. En toda la página, <span style="color:var(--ct)">azul</span> es el equipo A
+  y <span style="color:var(--t)">dorado</span> el equipo B. A es el de menor ID en Bo3.gg: no es local ni favorito.</p>
+</section>
+
+<section id="datos">
+  <div class="etiqueta"><span class="num">Mapa 1/3</span><span class="nombre">Los datos</span></div>
+  <h2>[[t_datos]]</h2>
+  <p>Cada fila es una serie completa —al mejor de 1, 3 o 5 mapas— con las estadísticas que tenía cada equipo
+  <b>antes</b> de empezarla. El volumen es parejo a lo largo de los tres años, así que el test (a la derecha de la línea roja)
+  se parece al entrenamiento: misma mezcla de tiers y de formatos.</p>
+  <div class="grafico" id="g-datos"></div>
+  <p class="mirar"><b>Qué mirar</b> Casi todo está en los tonos del medio (tiers B y C). Un modelo que sirva tiene que funcionar ahí, no sólo en los torneos que se ven por stream.</p>
+  <details><summary>Cómo lo sabemos <small>pipeline, filas y columnas descartadas</small></summary>
+    <h4>De dónde salen y cómo se obtienen</h4>
+    <ol>[[pipeline]]</ol>
+    <p>Fecha de los datos: extracción <code>[[extraccion]]</code>, publicada el [[publicada]]; la última serie empezó el [[hasta]].
+    Es la misma de las Entregas 2 y 3: <code>build_app.py</code> controla su huella SHA-256 antes de usarla.</p>
+    <h4>Qué es una fila</h4>
+    <p>Una serie entre dos equipos (<code>match_id</code> único). El objetivo es <code>target_team_a_won</code>: 1 si ganó A, 0 si ganó B.
+    A gana el 53,6 % de las series. Como las filas están ordenadas en el tiempo y se quiere predecir el futuro, todo se separa por fecha, nunca al azar.</p>
+    <h4>Qué se filtró, paso por paso</h4>
+    <p>Los primeros pasos los hace el DAG: las cantidades salen del <code>quality_report.json</code> de la extracción (<code>quality_state_distribution</code>),
+    que está en <code>datos/</code> del repositorio. Desde el Silver en adelante, son las que usa esta aplicación. Cada paso descuenta del anterior y el último cierra exacto con el Silver.</p>
+    [[tabla_pasos]]
+    <h4>Qué columnas se descartaron, y por qué</h4>
+    <div class="tabla"><table><thead><tr><th>Paso</th><th>Qué sale</th><th>Quedan</th></tr></thead><tbody>
+      <tr><td>Silver</td><td>—</td><td>113</td></tr>
+      <tr><td><b>Fuga</b></td><td>El resultado del propio partido: <code>end_at_utc</code>, <code>post_team_a_maps_won</code> y <code>post_team_b_maps_won</code> (con los mapas ganados se sabe quién ganó), además del objetivo.</td><td>109</td></tr>
+      <tr><td>No son predictores</td><td>12 de identificación y contexto (IDs, nombres, fecha, torneo, etapa, versión del juego) y 2 códigos de país.</td><td>95</td></tr>
+      <tr><td>Calidad</td><td>La familia KAST: tiene ceros en partidos con kills.</td><td>90</td></tr>
+      <tr><td>Diferencias A − B</td><td>Los valores de A y de B por separado, ya resumidos en su diferencia.</td><td>58</td></tr>
+      <tr><td>Hipótesis de la Entrega 2</td><td>Descanso (3), winrate de 10 (1), antigüedad del ranking (1).</td><td>53</td></tr>
+      <tr><td>Redundancia</td><td>Contadores idénticos (6) y columnas con |ρ de Spearman| ≥ 0,8 o fórmula directa de otra (20).</td><td>27</td></tr>
+      <tr><td>Modelado (Entrega 3)</td><td>Los 9 contadores <code>_count</code>: sacarlos no cambia la accuracy más que el ruido.</td><td>18</td></tr>
+    </tbody></table></div>
+    <p>Para descartar fugas escondidas, el Elo, los winrates, la tendencia, el descanso y los cruces directos se recalcularon desde cero
+    usando sólo series que terminaron antes de cada partido: coinciden con el Silver en las [[n]] filas.</p>
+  </details>
+</section>
+
+<section id="hallazgos">
+  <div class="etiqueta"><span class="num">Mapa 2/3</span><span class="nombre">Lo que encontramos</span></div>
+  <h2>[[t_hallazgo]]</h2>
+  <p>El Elo es un puntaje que sube cuando un equipo gana y baja cuando pierde, más cuanto más fuerte era el rival.
+  Ordenando las series por cuánto Elo de ventaja tenía el favorito, la relación es casi una escalera:
+  con cada tramo de ventaja, el favorito gana entre 5 y 8 series más de cada 100.</p>
+  <div class="grafico" id="g-hallazgo"></div>
+  <p class="mirar"><b>Qué mirar</b> A la izquierda, donde hay más series (casi 4 de cada 10 tienen menos de 50 puntos de diferencia), el favorito apenas le gana a una moneda.
+  Ese tramo parejo es donde cualquier modelo va a fallar más.</p>
+  <details><summary>Cómo lo sabemos <small>las hipótesis de la Entrega 2: una que se sostuvo y dos que no</small></summary>
+    <p>Las hipótesis se midieron en la Entrega 2 con la función <code>separacion</code> de la cátedra (distancia entre ganadores y perdedores,
+    en desvíos) y su semáforo: menos de 0,2 es rojo, más de 0,8 es verde. Se midieron sólo en el tramo de entrenamiento ([[h_tramo]] series anteriores al 01/03/2026),
+    para no elegir columnas mirando el período que después se usa para evaluar. Los números de abajo los recalcula <code>build_app.py</code> con el mismo código.</p>
+    <h4>El Elo del gráfico (H2): separa, pero no alcanza solo</h4>
+    <p>Separación <b>[[h2_sep]], [[h2_zona]]</b>, sobre [[h2_n]] series, con el signo esperado: cuando gana A, A llegaba en promedio con [[h2_a]] puntos más de Elo;
+    cuando gana B, con [[h2_b]] menos. Partiendo por tier: [[h2_tiers]], todos amarillos (el tier D da [[h2_d]], pero son [[h2_d_n]] series).
+    Con la vara de la cátedra la hipótesis quedó <b>inconclusa</b>: el Elo ordena, pero ningún tier llega a verde. El gráfico muestra lo mismo desde otro lado:
+    el favorito gana bastante más de la mitad, pero lejos del 100 %. La Entrega 3 confirmó que es la columna que más aporta al modelo. El tier A es donde menos separa, y es donde el modelo acierta menos.</p>
+    <h4>Una que se sostuvo (H3): las ventanas de 10 y de 20 partidos cuentan lo mismo</h4>
+    <p>El winrate de los últimos 10 y el de los últimos 20 se mueven juntos: Pearson <b>[[h3_r]], verde</b>, en [[h3_n]] series. Contra el resultado, la de 20 separa más
+    ([[h3_20]] contra [[h3_10]]) y promediar las dos no mejora ([[h3_prom]]). Nos quedamos con una sola. Después, en el análisis de redundancia, también esa salió:
+    las rondas ganadas de los últimos 20 ordenan las series casi igual y separan un poco más.</p>
+    <h4>Una que no (H1): el equipo más descansado no gana más</h4>
+    <p>Separación <b>[[h1_sep]], [[h1_zona]]</b>, sobre [[h1_n]] series, y además con el signo al revés: cuando gana A, A tenía en promedio [[h1_a]] días <i>menos</i> de descanso
+    que B; cuando gana B, [[h1_b]] días más. En CS2 profesional muchos días sin jugar no son descanso: son inactividad, falta de torneos o un equipo que se está rearmando.
+    Las columnas de descanso quedaron afuera del modelo.</p>
+    <h4>Otra que no (H5): las sorpresas no son más en BO1</h4>
+    <p>Esperábamos que en un BO1, donde no hay revancha en otro mapa, ganara más seguido el de menos Elo. No: es el [[h5_bo1]] en BO1 y el [[h5_global]] en el total
+    ([[h5_n]] series; separación [[h5_sep]], rojo). Las sorpresas del kill feed no son culpa del formato: aparecen igual en todos.</p>
+    <h4>Cómo se construyó el gráfico</h4>
+    <p>Para cada serie, el favorito es el equipo con más Elo antes de empezar, y su ventaja es el valor absoluto de <code>elo_advantage_a</code>.
+    Las ventajas se agrupan en siete tramos y en cada uno se calcula qué parte de las series ganó el favorito. Usa las [[n_elo]] series del dataset completo con alguna
+    diferencia de Elo; quedan afuera las [[empates_elo]] con Elo exactamente igual (casi siempre dos equipos nuevos, con el Elo inicial de 1500).</p>
+  </details>
+</section>
+
+<section id="modelo">
+  <div class="etiqueta"><span class="num">Mapa 3/3</span><span class="nombre">El modelo</span></div>
+  <h2>Una regresión logística acierta el [[acc_test]] de las series nuevas, y ningún modelo más complejo le gana por más que el ruido</h2>
+  <p>Comparamos cuatro familias de modelos, cada una con su propia búsqueda de hiperparámetros, con las mismas columnas y la misma
+  validación cruzada temporal: el modelo siempre entrena con el pasado y se mide con lo que viene. La métrica es la <b>accuracy</b>,
+  cuántas series de cada 100 acierta.</p>
+  <div class="grafico" id="g-modelos"></div>
+  <p class="mirar"><b>Qué mirar</b> Los cuatro puntos están casi encimados, y todos lejos del piso. Más complejidad no compró aciertos:
+  el random forest acierta [[rf_train]] en el entrenamiento y [[rf_acc]] en validación, porque memoriza series que no se repiten.
+  Con el empate, nos quedamos con el más simple, que además es el único que se puede escribir como fórmula adentro de esta página.</p>
+  <h3 class="sub">[[t_confianza]]</h3>
+  <div class="grafico" id="g-confianza"></div>
+  <p class="mirar"><b>Qué mirar</b> Las barras suben con la confianza, y la rayita blanca —lo que el modelo dijo— queda pegada al borde de cada barra —lo que pasó—.
+  El modelo <b style="font-family:inherit;text-transform:none;letter-spacing:0;font-size:inherit;color:#fff">sabe cuándo duda</b>: si dice 55 %, es casi una moneda; si dice 80 %, acierta [[conf80]].
+  La cuota de cada barra es la mínima para que apostarle al favorito no pierda plata: la usamos en el Pick'em.</p>
+  <h3 class="sub">Kill feed: las sorpresas que más le dolieron al modelo</h3>
+  <p class="nota" style="margin:0">Los errores del test con más confianza. A la izquierda, quien ganó; tachado, el favorito del modelo.</p>
+  <ul class="killfeed">[[killfeed]]</ul>
+  <details><summary>Cómo lo sabemos <small>métrica, piso, validación, comparación, ajuste, test, errores y coeficientes</small></summary>
+    <h4>La métrica, y por qué</h4>
+    <p><b>Accuracy</b>, declarada antes de entrenar el primer modelo. Las clases están casi parejas (A gana el 53,3 % del entrenamiento),
+    equivocarse a favor de A o de B cuesta lo mismo, y se lee directo. De control miramos el f1 macro y el recall de cada clase,
+    para que el modelo no se olvide de B.</p>
+    <h4>El piso</h4>
+    <p><code>DummyClassifier(strategy="most_frequent")</code>: dice siempre «gana A». Acierta [[piso_cv]] en validación y [[piso_test]] en el test.</p>
+    <h4>Cómo se armó la validación</h4>
+    <p>Test: las [[n_test]] series desde el 01/03/2026, apartadas antes de mirar nada. Entrenamiento: las [[n_train]] que empezaron y terminaron antes.
+    Adentro del entrenamiento, 5 folds con <code>TimeSeriesSplit</code> sobre los días del calendario: cada fold entrena con todo lo anterior
+    y valida con los ~5 meses siguientes, y se purga cualquier serie cuyo resultado todavía no se conocía. La imputación, el escalado y
+    el <code>log1p</code> están adentro del pipeline, así que se vuelven a aprender en cada fold.</p>
+    [[tabla_folds]]
+    <h4>La comparación: cuatro familias, cada una con su grilla</h4>
+    <p>Regla fijada de antemano: si un modelo más complejo no le gana a la logística por más de un desvío, se queda la logística.
+    El mejor promedio es el [[mejor]] ([[mejor_acc]]); su límite es [[limite]], y la logística ([[log_acc]]) queda adentro.
+    El árbol de decisión ([[arbol_acc]]) queda afuera: su mejor versión es un árbol de sólo [[arbol_prof]] niveles, porque con más profundidad memoriza.</p>
+    [[tabla_comp]]
+    <p>Las tres mejores combinaciones de cada grilla (todas están en el notebook):</p>
+    [[tabla_grillas]]
+    <h4>El ajuste del elegido</h4>
+    <p>Con las 18 columnas finales, la grilla de la logística: <code>C</code> casi no cambia nada (no estaba sobreajustando), y
+    <code>class_weight="balanced"</code> empareja el recall de las dos clases sin costar accuracy. Ganador: C = 0,01, balanced.</p>
+    [[tabla_ajuste]]
+    <h4>El resultado en el test</h4>
+    <p>Accuracy [[acc_test]] en las [[n_test]] series del test, contra [[piso_test]] del piso: [[dif_piso]] puntos más. En validación había dado [[acc_cv]]:
+    el test no muestra que ese número estuviera inflado. Una vez congelado todo, medimos también a los otros tres en el mismo test, sólo como contexto:</p>
+    [[tabla_otros]]
+    <h4>Dónde se equivoca, y por qué</h4>
+    <ul>
+      <li><b>En las sorpresas.</b> El [[sorpresas_test]] de las series del test las ganó el equipo que llegaba con menos Elo. Ahí el modelo acierta
+      el [[acc_sorpresa]]; en el resto, el [[acc_no_sorpresa]]. El [[sorpresa_err]] de sus errores son sorpresas.</li>
+      <li><b>Cuando duda.</b> Con confianza de 50–55 % acierta el [[conf_baja]]. Sus errores se juntan en las series parejas.</li>
+      <li><b>No es culpa de la logística.</b> El [[falla_todos_err]] de sus errores también los cometen el árbol, el random forest y el boosting:
+      fallan en las mismas series. Lo que falta es información, no complejidad.</li>
+      <li><b>No hay una señal que avise.</b> Entre las [[alta_n]] series donde el modelo dio 70 % o más, los errores y los aciertos tienen el mismo perfil:
+      favorito inactivo, alineación cambiada, sin ranking, tier A o BO1 aparecen en proporciones parecidas (tabla en el notebook, sección 11.2.5).
+      Lo que decide esas series —el veto de mapas, un jugador enfermo, el rendimiento del día— no está en los datos.</li>
+      <li><b>Por tipo de partido</b>, falla más en tier A, donde el Elo separa menos, y en [[peor_mes]], después del parón de mitad de año ([[peor_mes_acc]]).</li>
+    </ul>
+    [[tabla_tipos]]
+    <p><b>Un error concreto.</b> [[caso_a]] vs. [[caso_b]] ([[caso_fecha]], [[caso_torneo]]): el modelo le dio [[caso_conf]] a [[caso_fav]], que llegaba
+    con [[caso_elo]] puntos más de Elo, y ganó [[caso_ganador]] [[caso_mapas]]. [[caso_inactivos_cap]]: todas sus estadísticas describían
+    cómo jugaban más de un mes antes.</p>
+    <p><b>¿Las probabilidades dicen la verdad?</b> Casi. Por tramo de confianza, lo que dice el modelo y lo que pasa coinciden (gráfico de arriba).
+    En promedio le da a A [[calib_media]] y A gana [[calib_real]]: el <code>class_weight="balanced"</code> corre las probabilidades unos dos puntos hacia B, a propósito.</p>
+    <h4>En qué se apoya</h4>
+    <p>Sobre todo en la diferencia de Elo: desordenarla en el test baja la accuracy más de 5 puntos, el triple que cualquier otra columna.
+    Después vienen el ranking, la experiencia de cada equipo y el winrate de rondas. Los coeficientes (positivo empuja hacia «gana A»):</p>
+    [[tabla_coefs]]
+    <p>El Elo no es una fuga: se recalculó desde cero con resultados anteriores y coincide con el Silver en todas las filas.</p>
+  </details>
+</section>
+
+<div class="fin-serie">
+  <div class="grande"><span class="ct">Fin de la serie</span> · <span class="t">Ahora jugás vos</span></div>
+  <p>Hasta acá la historia la contamos nosotros. En el overtime, las preguntas las hacés vos: recorré las series y armá tu propio partido.</p>
+</div>
+
+<section id="explora" class="copa">
+  <div class="etiqueta"><span class="num">OT 1</span><span class="nombre">Explorá · modo práctica</span></div>
+  <h2>Las [[n_ex]] series que el modelo predijo sin haberlas visto</h2>
+  <p>Cada punto es una serie: a la derecha, A llegaba con más Elo; arriba, el modelo le daba más chances a A. El color es quién ganó de verdad.
+  Los puntos <span class="chip" style="background:var(--t)"></span>dorados arriba de la línea y los <span class="chip" style="background:var(--ct)"></span>azules
+  abajo son los errores. Achicá el universo con los controles, pasá el mouse para ver una serie, o hacé clic para fijarla.
+  Las de validación las predijo un modelo entrenado sólo con el pasado de cada fold; las del test, el modelo final.</p>
+  <div class="controles" id="c-explora"></div>
+  <div class="grafico" id="g-explora"></div>
+  <p class="nota">Probá: «Sólo sorpresas» muestra las series que ganó el de menos Elo, y cuánto le cuesta al modelo acertarlas.
+  Subí la confianza mínima a 80 % para ver cuántas quedan y qué tan pocas falla. Buscá a tu equipo por nombre.</p>
+</section>
+
+<section id="proba" class="copa">
+  <div class="etiqueta"><span class="num">OT 2</span><span class="nombre">Pick'em · probá el modelo</span></div>
+  <h2>Elegí dos equipos, mirá a quién elige el modelo y si la cuota de la casa tiene valor</h2>
+  <p>Los controles se cargan con los números de cada equipo al [[hoy]], como si la serie se jugara hoy, y después podés mover cualquiera.
+  La probabilidad la calcula el gráfico con la fórmula de la logística entrenada —los mismos coeficientes que el notebook—: nada se reentrena.
+  Los controles van del mínimo al máximo que vio el entrenamiento, así que no se puede cargar algo que el modelo nunca vio;
+  si un valor cae en el 1 % más extremo, el gráfico avisa.</p>
+  <div class="pickem">
+    <div class="lado ct" id="lado1"><label for="eq1">Equipo 1</label><select id="eq1"><option value="">— Elegí un equipo —</option>[[opciones]]</select><div class="rol" id="rol1"></div></div>
+    <div class="vs">VS</div>
+    <div class="lado t" id="lado2"><label for="eq2">Equipo 2</label><select id="eq2"><option value="">— Elegí el rival —</option>[[opciones]]</select><div class="rol" id="rol2"></div></div>
+  </div>
+  <div class="acciones"><button type="button" id="azar">Partido al azar</button><button type="button" id="mediana">Volver a la mediana</button></div>
+  <div id="avisos"></div>
+  <div class="probar">
+    <div class="ficha">[[sliders]]
+      <fieldset class="boleta"><legend>Boleta de apuesta</legend><div class="slot" id="d-cuotas"></div>
+      <p class="nota" style="margin:6px 0 2px">Cargá las cuotas decimales que ofrece la casa (lo que te devuelve por cada $1 apostado).
+      Si la probabilidad del modelo por la cuota da más de 1, la apuesta tiene valor esperado positivo.</p></fieldset>
+    </div>
+    <div class="fijo"><div class="grafico" id="g-proba"></div>
+      <p class="nota">Valores de partida: la mediana del entrenamiento. «Sin dato» es lo que el modelo ve cuando un equipo
+      no tiene esa estadística (por ejemplo, la tendencia de un equipo con menos de 10 series): usa la mediana y una marca de dato faltante.</p>
+      <p class="nota"><b>Antes de apostar:</b> el modelo acierta 2 de cada 3 series y no sabe nada del veto de mapas, de cambios de último momento ni
+      de cómo llega cada jugador. Las casas sí. Es un ejercicio para leer el modelo, no un consejo.</p></div>
+  </div>
+  <p class="nota">Los [[n_equipos]] equipos de la lista son los que tienen al menos 20 series y jugaron desde el 01/06/2026, ordenados por Elo.
+  Elo, partidos previos, forma, tendencia y actividad se recalculan con todas sus series terminadas; rondas, mismo formato, mismo tier, alineación y ranking
+  son el último valor registrado. El cruce directo sale de sus últimos 5 enfrentamientos.</p>
+</section>
+</main>
+
+<footer>Ciencia de Datos · UTN FRM · 2026 · Comisión 5K10 · Grupo 07 · Datos: Bo3.gg, series del [[desde]] al [[hasta]].
+Generado por <code>build_app.py</code> desde el repositorio del grupo. Tipografías Rajdhani y Barlow (licencia SIL OFL).
+Counter-Strike 2 es una marca de Valve Corporation; este es un trabajo académico sin relación con Valve ni con Bo3.gg.</footer>
+
+<script>[[js_vega]]</script>
+<script>
+const OPC = {actions: false, renderer: "canvas", tooltip: {theme: "dark"},
+  formatLocale: {decimal: ",", thousands: ".", grouping: [3], currency: ["$", ""], percent: " %"},
+  timeFormatLocale: [[locale_tiempo]]};
+const SPECS = [[specs]];
+const EQUIPOS = [[equipos_json]];
+const CRUCES = [[cruces_json]];
+const RANGOS = [[rangos_json]];
+const POR_ID = Object.fromEntries(EQUIPOS.map(e => [e.id, e]));
+window.vistas = {};
+// Las fuentes se cargan antes de dibujar, para que el canvas las use.
+window.listo = document.fonts.ready.then(() => Promise.all(Object.entries(SPECS).map(([id, s]) =>
+  vegaEmbed("#" + id, s, OPC).then(r => { window.vistas[id] = r.view; }))));
+
+function ajustar(p, x, avisos, quien) {
+  const r = RANGOS[p];
+  let v = +(Math.round(x / r.paso) * r.paso).toFixed(4);
+  if (v < r.min || v > r.max) {
+    avisos.push(`${r.etiqueta}: ${quien} da ${v.toLocaleString("es-AR")}, fuera de lo que vio el modelo; se usa ${(v < r.min ? r.min : r.max).toLocaleString("es-AR")}.`);
+    v = Math.min(Math.max(v, r.min), r.max);
+  }
+  return v;
+}
+async function aplicar(valores, nombres) {
+  await window.listo;
+  const v = window.vistas["g-proba"];
+  for (const [k, x] of Object.entries(valores)) v.signal(k, x);
+  v.signal("nombre_a", nombres[0]); v.signal("nombre_b", nombres[1]);
+  await v.runAsync();
+}
+function mediana() {
+  const val = {};
+  for (const [p, r] of Object.entries(RANGOS)) { val[p] = r.mediana; if (r.sin_dato) val["sd_" + p] = false; }
+  return val;
+}
+function lados(i1, i2) {
+  // A es el de menor ID: su tarjeta va en azul (CT) y la otra en dorado (T).
+  const l1 = document.getElementById("lado1"), l2 = document.getElementById("lado2");
+  const uno_es_a = !i2 || !i1 || i1 < i2;
+  l1.className = "lado " + (uno_es_a ? "ct" : "t"); l2.className = "lado " + (uno_es_a ? "t" : "ct");
+  document.getElementById("rol1").textContent = i1 ? (uno_es_a ? "Equipo A del modelo · azul" : "Equipo B del modelo · dorado") : "";
+  document.getElementById("rol2").textContent = i2 ? (uno_es_a ? "Equipo B del modelo · dorado" : "Equipo A del modelo · azul") : "";
+}
+function partido() {
+  const i1 = +document.getElementById("eq1").value, i2 = +document.getElementById("eq2").value;
+  const caja = document.getElementById("avisos");
+  lados(i1, i2);
+  if (!i1 || !i2) { caja.textContent = ""; return; }
+  if (i1 === i2) { caja.textContent = "Elegí dos equipos distintos."; return; }
+  const [A, B] = i1 < i2 ? [POR_ID[i1], POR_ID[i2]] : [POR_ID[i2], POR_ID[i1]];
+  const val = mediana(), avisos = [];
+  const pone = (p, x, quien) => {
+    if (x === null || x === undefined || Number.isNaN(x)) { val["sd_" + p] = true; }
+    else { val[p] = ajustar(p, x, avisos, quien); if (RANGOS[p].sin_dato) val["sd_" + p] = false; }
+  };
+  const resta = (a, b) => (a === null || b === null) ? null : a - b;
+  pone("elo", A.elo - B.elo, "la diferencia");
+  pone("rank", resta(A.rank, B.rank), "la diferencia");
+  pone("rondas", resta(A.rondas, B.rondas), "la diferencia");
+  pone("forma", resta(A.forma, B.forma), "la diferencia");
+  pone("mismo_bo", resta(A.mismo_bo, B.mismo_bo), "la diferencia");
+  pone("mismo_tier", resta(A.mismo_tier, B.mismo_tier), "la diferencia");
+  pone("plantel", resta(A.plantel, B.plantel), "la diferencia");
+  pone("tend_a", A.tend, A.n); pone("tend_b", B.tend, B.n);
+  const c = CRUCES[A.id + "-" + B.id];
+  pone("h2h", c && c[1] > 0 ? c[0] / c[1] : null, "el cruce");
+  pone("previos_a", A.previos, A.n); pone("previos_b", B.previos, B.n);
+  pone("sem_a", A.sem, A.n); pone("sem_b", B.sem, B.n);
+  pone("mes_a", A.mes, A.n); pone("mes_b", B.mes, B.n);
+  const base = c ? `Se cruzaron ${c[1]} ${c[1] === 1 ? "vez" : "veces"} en sus últimos enfrentamientos: ${A.n} ganó ${c[0]}.`
+                 : "No tienen cruces previos registrados: el cruce directo queda «sin dato».";
+  caja.textContent = [base, ...avisos].join(" ");
+  aplicar(val, [A.n, B.n]);
+}
+document.getElementById("eq1").addEventListener("change", partido);
+document.getElementById("eq2").addEventListener("change", partido);
+document.getElementById("azar").addEventListener("click", () => {
+  const top = EQUIPOS.slice(0, 60), i = Math.floor(Math.random() * top.length);
+  let j = Math.floor(Math.random() * (top.length - 1)); if (j >= i) j++;
+  document.getElementById("eq1").value = top[i].id; document.getElementById("eq2").value = top[j].id; partido();
+});
+document.getElementById("mediana").addEventListener("click", () => {
+  document.getElementById("eq1").value = ""; document.getElementById("eq2").value = "";
+  document.getElementById("avisos").textContent = ""; lados(0, 0);
+  aplicar(mediana(), ["Equipo A", "Equipo B"]);
+});
+const enlaces = [...document.querySelectorAll(".rondas a")];
+const obs = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting)
+  enlaces.forEach(a => a.classList.toggle("activo", a.getAttribute("href") === "#" + e.target.id)); }), {rootMargin: "-35% 0px -60% 0px"});
+document.querySelectorAll("section").forEach(s => obs.observe(s));
+</script>
+</body>
+</html>
