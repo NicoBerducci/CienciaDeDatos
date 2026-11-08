@@ -15,7 +15,6 @@
 | `build_app.py` | La construcción: lee el Silver, entrena el modelo con la misma semilla y genera `docs/index.html`. |
 | `plantilla.html` | El esqueleto de la página: textos, estilos y la lógica del Pick'em. `build_app.py` lo completa con números y gráficos. |
 | `fuentes/` | Rajdhani y Barlow (licencia SIL OFL, incluida), embebidas en la página para que funcione sin conexión. |
-| `GUIA_DEFENSA.md` | Lo que se pregunta en los 25 minutos, respondido con lo que hay en la app. |
 
 El resto del repositorio: `dags/` es el pipeline (Entregas 1 y 2), `entrega 2/` el EDA y las hipótesis, `entrega 3/` el modelado corregido, y `docs/` la aplicación generada.
 
