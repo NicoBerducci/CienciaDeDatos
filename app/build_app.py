@@ -654,18 +654,29 @@ def main():
                                            'Accuracy en el test': [pct(v) for v in test_otros.values]}))
     tabla_coefs = tabla_html(pd.DataFrame({'Variable (escalada)': [c.split('__')[1] for c in coefs.index[:8]],
                                            'Coeficiente': [f'{v:+.3f}'.replace('.', ',') for v in coefs.values[:8]]}))
+    em = embudo_pipeline(len(df))
+    if em:
+        quedan = lambda n: f'{num(n)}'
+        filas_embudo = [
+            ('Partidos en el registro del DAG', num(em['total']), 'Todos los partidos de Counter-Strike que el DAG descubrió en Bo3.gg desde el 27/09/2023 y tiene registrados.'),
+            ('Sale: abandono', f"− {num(em['abandono'])}", 'Forfeit, walkover o «defwin» según la fuente, y un abandono revisado a mano (1win–M1X, 25/09/2025): '
+             f"no se jugaron. Quedan {quedan(em['total'] - em['abandono'])}."),
+            ('Sale: resultado no verificable', f"− {num(em['resultado'])}", 'Empates, marcadores incompatibles con el formato o que contradicen al ganador '
+             f"(<code>quarantined_result</code>). No se inventa un ganador. Quedan {quedan(em['total'] - em['abandono'] - em['resultado'])}."),
+            ('Sale: cronología contradictoria', f"− {num(em['temporal'])}", 'Fin anterior al inicio o mapas que empiezan antes del partido '
+             f"(<code>quarantined_temporal</code>). Quedan {quedan(em['elegibles'])} elegibles: {num(em['completos'])} con todos sus mapas válidos y "
+             f"{num(em['parciales'])} con el resultado bien pero mapas que no cierran (cuentan para Elo y winrate, no para estadísticas de jugadores)."),
+            ('Sale: no es CS2', f"− {num(em['no_cs2'])}", 'Partidos de CS:GO o de versión desconocida (en el Intermediate hay '
+             f"{num(em['csgo'])} de CS:GO y {num(em['sin_version'])} sin versión): quedan en el Bronze, fuera del Silver y de los historiales."),
+        ]
+    else:
+        filas_embudo = [('Filtros del DAG', '—', 'Falta el quality_report.json de la extracción en datos/.')]
     pasos_filas = pd.DataFrame([
-        ('Partidos descubiertos', '—', 'Todos los partidos de Counter-Strike que lista Bo3.gg desde el 27/09/2023.'),
-        ('Sale: no terminados', '—', 'Partidos sin estado «finished»: no tienen resultado.'),
-        ('Sale: abandono', '—', 'Forfeit, walkover o «defwin» según la fuente, y un abandono revisado a mano (1win–M1X, 25/09/2025): '
-         'no se jugaron, no dicen nada de la fuerza de los equipos.'),
-        ('Sale: resultado no verificable', '—', 'Empates, marcadores incompatibles con el formato o que contradicen al ganador '
-         '(<code>quarantined_result</code>). No se inventa un ganador.'),
-        ('Sale: cronología contradictoria', '—', 'Fin anterior al inicio o mapas que empiezan antes del partido (<code>quarantined_temporal</code>).'),
-        ('Sale: no es CS2', '—', 'Partidos de CS:GO o de versión desconocida: quedan en el Bronze, fuera del Silver y de los historiales.'),
+        *filas_embudo,
         ('Silver del pipeline', num(len(df)), 'Una fila por serie de CS2 (game_version = 2), del '
          f'{df.start_at_utc.min():%d/%m/%Y} al {df.start_at_utc.max():%d/%m/%Y}, con 113 columnas. '
-         f'{int(df.end_at_utc.isna().sum())} no tienen hora de finalización: no se inventa, y no alimentan el historial de partidos posteriores.'),
+         f'{int(df.end_at_utc.isna().sum())} no tienen hora de finalización: no se inventa, y no alimentan el historial de partidos posteriores. '
+         + (f"El reporte del DAG pasó sus {em['controles']} controles." if em else '')),
         ('Entrenamiento', num(len(train)), f'Series que empezaron y terminaron antes del {cm.CORTE_TEST:%d/%m/%Y}. Acá se elige todo.'),
         ('Purgadas', num(len(purgados)), 'Empezaron antes del corte pero no consta que terminaran antes: su resultado no se conocía.'),
         ('Test', num(len(test)), f'Las que empiezan desde el {cm.CORTE_TEST:%d/%m/%Y}. Se miran una sola vez, al final.'),
@@ -751,6 +762,27 @@ def killfeed(detalle, n=6):
                      f'<span class="{lado_c} cae">{cae}</span><span class="dato"><span class="prob">el modelo le daba {pct(r.confianza, 0)} a {cae}</span>'
                      f' · {mapas} · {r.start_at_utc:%d/%m/%Y} · {r.tournament_name.strip()}</span></li>')
     return ''.join(filas)
+
+
+def embudo_pipeline(n_silver):
+    """Las cantidades de cada filtro del DAG, desde el quality_report.json de la extracción."""
+    candidatos = [cm.RAIZ_REPO / 'datos' / f'quality_report_{EXTRACCION}.json', RAIZ / 'datos' / f'quality_report_{EXTRACCION}.json']
+    ruta = next((p for p in candidatos if p.is_file()), None)
+    if ruta is None:
+        return None
+    q = json.loads(ruta.read_text(encoding='utf-8'))
+    assert q['extraction_id'] == EXTRACCION and q['valid']
+    e = q['quality_state_distribution']
+    total = sum(e.values())
+    elegibles = e['eligible_complete_maps'] + e['eligible_partial']
+    no_cs2 = elegibles - q['silver_rows']
+    assert q['silver_rows'] == n_silver, 'El reporte no corresponde a este CSV.'
+    assert total - e['excluded_forfeit'] - e['quarantined_result'] - e['quarantined_temporal'] - no_cs2 == n_silver
+    v = {str(k): n for k, n in q['facts_game_version_distribution'].items()}
+    return {'total': total, 'abandono': e['excluded_forfeit'], 'resultado': e['quarantined_result'],
+            'temporal': e['quarantined_temporal'], 'elegibles': elegibles, 'completos': e['eligible_complete_maps'],
+            'parciales': e['eligible_partial'], 'no_cs2': no_cs2, 'csgo': v.get('1.0', 0), 'sin_version': v.get('nan', 0),
+            'intermedio': q['intermediate_rows'], 'controles': len(q['checks']), 'generado': q['generated_at_utc']}
 
 
 def sliders_html(rangos):

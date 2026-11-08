@@ -236,8 +236,8 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
     <p>Una serie entre dos equipos (<code>match_id</code> único). El objetivo es <code>target_team_a_won</code>: 1 si ganó A, 0 si ganó B.
     A gana el 53,6 % de las series. Como las filas están ordenadas en el tiempo y se quiere predecir el futuro, todo se separa por fecha, nunca al azar.</p>
     <h4>Qué se filtró, paso por paso</h4>
-    <p>Los primeros pasos los hace el DAG; las cantidades por estado (<code>quality_state_distribution</code>) quedan en el <code>quality_report.json</code> de cada extracción.
-    Desde el Silver en adelante, las cantidades son las que usa esta aplicación.</p>
+    <p>Los primeros pasos los hace el DAG: las cantidades salen del <code>quality_report.json</code> de la extracción (<code>quality_state_distribution</code>),
+    que está en <code>datos/</code> del repositorio. Desde el Silver en adelante, son las que usa esta aplicación. Cada paso descuenta del anterior y el último cierra exacto con el Silver.</p>
     [[tabla_pasos]]
     <h4>Qué columnas se descartaron, y por qué</h4>
     <div class="tabla"><table><thead><tr><th>Paso</th><th>Qué sale</th><th>Quedan</th></tr></thead><tbody>
