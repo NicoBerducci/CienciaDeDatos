@@ -1,12 +1,13 @@
 """Genera la aplicación de la Entrega 4 (docs/index.html) a partir del CSV del pipeline.
 
     python build_app.py            # vuelve a correr todo: grillas, modelo final y gráficos
-    python build_app.py --cache    # reusa las grillas de la sección 7 si ya están en resultados/
+    python build_app.py --cache    # reusa la búsqueda de las secciones 7 a 9 si ya está en resultados/
 
 Qué hace, en orden:
   1. Carga el Silver que produce el pipeline (datos/matches_latest.csv) con cs2_modelo.cargar.
   2. Separa entrenamiento y test y arma los 5 folds temporales (las mismas funciones del notebook).
-  3. Corre las grillas de las cuatro familias (sección 7 del notebook) y entrena el modelo final
+  3. Corre la búsqueda de las secciones 7 a 9 del notebook (cuatro familias, nueve variantes de columnas,
+     cada una con su grilla) y entrena el modelo final
      con cs2_modelo.entrenar_final: logística, 18 columnas, C = 0,01, balanced, semilla 42.
   4. Calcula las predicciones para explorar: fuera de fold para la validación cruzada y del modelo
      final para el test. Viajan con los datos, porque en el navegador no corre Python.
@@ -50,16 +51,11 @@ PUBLICADA = '16/10/2026 a las 02:58 UTC'
 # bo3_cs2_features y bo3_cs2_rebuild; política de calidad series_temporal_family_v3).
 PIPELINE = [
     ('Descubrimiento', 'El DAG <code>bo3_cs2_ingest</code> (Airflow, una corrida diaria a las 00:00 UTC, incremental) recorre la API '
-                       'pública de Bo3.gg día por día desde el 27/09/2023 y pide los partidos de Counter-Strike. '
-                       'En la Entrega 1 usábamos PandaScore; lo cambiamos porque sólo daba el resultado.'),
-    ('Bronze', 'Para cada partido terminado guarda, sin tocarlas, las respuestas de detalle, mapas, estadísticas de jugadores y '
-               'alineaciones, y además los snapshots oficiales del ranking. Es append-only: nunca se pisa lo descargado. '
-               'Los partidos recientes incompletos se reintentan a 1, 3 y 7 días.'),
-    ('Controles de calidad', '<code>bo3_cs2_quality</code> revisa cada partido sin corregir ni inventar nada. Verifica que el marcador de la serie '
-                             'sea compatible con el formato (BO1, BO2, BO3 o BO5) y coincida con el ganador, y que la cronología cierre '
-                             '(el fin no puede ser anterior al inicio ni a un mapa). Valida los mapas (MR12 en CS2, prórrogas MR3) antes '
-                             'de usar sus estadísticas. Si los mapas no cierran, se bloquean las estadísticas de jugadores que salen de '
-                             'ellos, pero la serie sigue valiendo para el Elo y los winrates.'),
+                       'pública de Bo3.gg día por día desde el 27/09/2023 y pide los partidos de Counter-Strike.'),
+    ('Bronze', 'Guarda tal cual, sin pisar nunca lo descargado, el detalle, los mapas, las estadísticas de jugadores, las alineaciones '
+               'y los rankings oficiales de cada partido terminado.'),
+    ('Controles de calidad', '<code>bo3_cs2_quality</code> revisa que el marcador, el ganador, la cronología y los mapas de cada partido '
+                             'sean coherentes, sin corregir ni inventar nada.'),
     ('Silver', '<code>bo3_cs2_features</code> se queda sólo con CS2 (<code>game_version = 2</code>) <b>antes</b> de armar los historiales: '
                'los partidos de CS:GO quedan en el Bronze pero no alimentan ninguna estadística. Después recorre los partidos en orden y, '
                'para cada uno, calcula las estadísticas de cada equipo con partidos <b>terminados antes de su inicio</b>: Elo (arranca en 1500, '
@@ -78,35 +74,37 @@ PIPELINE = [
 # 1–3 · Datos, partición, grillas y modelo final
 # ---------------------------------------------------------------------------
 def correr_grillas(train, cv, usar_cache):
-    archivo = RESULTADOS / 'grillas.pkl'
+    """Secciones 7 a 9 del notebook: el piso y las cuatro familias × nueve variantes × su grilla."""
+    archivo = RESULTADOS / 'busqueda_v4.pkl'
     if usar_cache and archivo.is_file():
         return pickle.loads(archivo.read_bytes())
     X, y = train[cm.COLUMNAS_E2 + [cm.EXTRA]], train.target_team_a_won
-    salida = {}
-    for nombre in cm.ORDEN_SIMPLICIDAD:
-        print(f'  grilla: {nombre}…', flush=True)
-        b = GridSearchCV(cm.armar(cm.FAMILIAS[nombre], cm.COLUMNAS_E2), cm.GRILLAS[nombre], scoring=cm.SCORING,
-                         refit=False, cv=cv, n_jobs=cm.N_JOBS, return_train_score=True, error_score='raise').fit(X, y)
-        r = pd.DataFrame(b.cv_results_)
-        salida[nombre] = {'tabla': cm.tabla_de(b), 'mejor': r.loc[r.rank_test_accuracy.idxmin()],
-                          'params': r.loc[r.rank_test_accuracy.idxmin(), 'params']}
-    piso, _ = cm.medir(cm.armar(DummyClassifier(strategy='most_frequent'), cm.COLUMNAS_E2), X, y, cv)
-    salida['piso'] = piso
+    salida = cm.buscar_familias(train, cv, avisar=lambda m: print(m, flush=True))
+    salida['piso'], _ = cm.medir(cm.armar(DummyClassifier(strategy='most_frequent'), cm.COLUMNAS_E2), X, y, cv)
     RESULTADOS.mkdir(exist_ok=True)
     archivo.write_bytes(pickle.dumps(salida))
     return salida
 
 
+def fmt_valor(v):
+    """7.0 -> '7'; 0.05 -> '0,05'; los textos quedan igual."""
+    if isinstance(v, float) and v.is_integer() and v >= 1:
+        v = int(v)
+    return str(v).replace('.', ',')
+
+
+def combinacion(params):
+    return ', '.join(f"{k.replace('clasificador__', '')} = {fmt_valor(v)}" for k, v in params.items())
+
+
 def tabla_comparacion(grillas):
-    filas = {'piso': {**grillas['piso'], 'combinación': '—'}}
+    """El representante de cada familia (su variante elegida y su mejor combinación) y el piso."""
+    filas = {'piso': {**grillas['piso'], 'combinación': '—', 'variante': '—', 'columnas': 27}}
     for nombre in cm.ORDEN_SIMPLICIDAD:
-        r = grillas[nombre]['mejor']
-        folds = np.array([r[f'split{k}_test_accuracy'] for k in range(cm.N_SPLITS)])
-        filas[nombre] = {'accuracy': folds.mean(), 'desvío': folds.std(), 'accuracy train': r.mean_train_accuracy,
-                         'f1 macro': r.mean_test_f1_macro, 'recall A': r.mean_test_recall_A,
-                         'recall B': r.mean_test_recall_B,
-                         'combinación': ', '.join(f"{k.replace('clasificador__', '')} = {str(v).replace('.', ',')}"
-                                                  for k, v in grillas[nombre]['params'].items())}
+        r = grillas[nombre]
+        filas[nombre] = {k: r[k] for k in ['accuracy', 'desvío', 'accuracy train', 'f1 macro', 'recall A', 'recall B',
+                                           'variante', 'columnas']}
+        filas[nombre]['combinación'] = combinacion(r['parámetros'])
     t = pd.DataFrame(filas).T
     for c in ['accuracy', 'desvío', 'accuracy train', 'f1 macro', 'recall A', 'recall B']:
         t[c] = t[c].astype(float)
@@ -273,7 +271,7 @@ def datos_explorar(train, test, p_val, fold_val, p_test):
             'elo': d.elo_advantage_a.round(0).astype(int), 'p': d.prob_a.round(3),
             'ganador': np.where(d.real == 1, 'Ganó A', 'Ganó B'), 'ok': d.acierto.astype(int),
             'mapas': d.post_team_a_maps_won.astype(str) + '-' + d.post_team_b_maps_won.astype(str),
-            'periodo': periodo, 'sorpresa': d.sorpresa.astype(int)}))
+            'periodo': periodo, 'sorpresa': d.sorpresa.fillna(0).astype(int)}))
     return pd.concat(filas, ignore_index=True)
 
 
@@ -485,6 +483,224 @@ def g_proba(f, train, equipo_ejemplo):
     return graf.configure_view(stroke=None), rangos
 
 
+# ---------------------------------------------------------------- la apuesta (backtest con cuotas reales)
+APUESTA = 100   # pesos por serie
+
+
+def ruta_cuotas():
+    hay = sorted((cm.RAIZ_REPO / 'datos').glob('cuotas_bo3_*.csv'))
+    return hay[-1] if hay else None
+
+
+def backtest(detalle, test, cuotas, dias=30):
+    """Una fila por serie del último mes: a quién apostaba el modelo, qué cuota pagaba la casa y cuánto dejaba."""
+    d = detalle.assign(match_slug=test.match_slug.values)
+    hasta = d.start_at_utc.max()
+    desde = (hasta - pd.Timedelta(days=dias)).normalize()
+    mes = d[d.start_at_utc >= desde].copy()
+    c = cuotas.drop(columns=['tier', 'bo_type']).rename(columns={'estado': 'estado_bo3'})
+    mes = mes.merge(c, on='match_slug', how='left', validate='one_to_one')
+    assert len(mes) == mes.match_slug.nunique()
+    es1 = mes.cuota1_team_id == mes.team_a_id
+    mes['cuota_a'] = np.where(es1, mes.cuota1, mes.cuota2)
+    mes['cuota_b'] = np.where(es1, mes.cuota2, mes.cuota1)
+    mes['con_cuota'] = mes.cuota_a.notna() & mes.cuota_b.notna()
+    elige_a = mes.predicho == 1
+    mes['pick'] = np.where(elige_a, mes.team_a_name, mes.team_b_name)
+    mes['cuota_pick'] = np.where(elige_a, mes.cuota_a, mes.cuota_b)
+    mes['cuota_rival'] = np.where(elige_a, mes.cuota_b, mes.cuota_a)
+    mes['resultado'] = np.where(mes.acierto, APUESTA * (mes.cuota_pick - 1), -APUESTA)
+    mes['valor'] = mes.confianza * mes.cuota_pick > 1
+    return mes, desde, hasta
+
+
+def resumen_apuesta(b):
+    """Números del texto: todo sale de las series con cuota."""
+    a = b[b.con_cuota]
+    fav_casa_a = a.cuota_a < a.cuota_b
+    distintas = a.cuota_a != a.cuota_b
+    gana_fav = np.where(fav_casa_a, a.real == 1, a.real == 0)[distintas]
+    cuota_fav = np.where(fav_casa_a, a.cuota_a, a.cuota_b)
+    neto_fav = np.where(np.where(fav_casa_a, a.real == 1, a.real == 0), APUESTA * (cuota_fav - 1), -APUESTA)[distintas].sum()
+    por_dia = a.groupby(a.start_at_utc.dt.date).resultado.sum()
+    v = a[a.valor]
+    return {'n_mes': len(b), 'n_cuota': len(a), 'n_sin': int((~b.con_cuota).sum()),
+            'apostado': APUESTA * len(a), 'neto': float(a.resultado.sum()),
+            'cobrado': float((APUESTA * a.cuota_pick).where(a.acierto, 0).sum()),
+            'roi': float(a.resultado.sum() / (APUESTA * len(a))), 'acierto': float(a.acierto.mean()),
+            'equilibrio': float(1 / a.acierto.mean()),
+            'mediana_acierta': float(a.cuota_pick[a.acierto].median()),
+            'mediana_falla': float(a.cuota_pick[~a.acierto].median()),
+            'pct_extrema': float((np.minimum(a.cuota_a, a.cuota_b) <= 1.06).mean()),
+            'fav_casa_gana': float(gana_fav.mean()), 'neto_fav_casa': float(neto_fav), 'n_fav_casa': int(distintas.sum()),
+            'dias': len(por_dia), 'dias_positivos': int((por_dia > 0).sum()),
+            'mejor_dia': (por_dia.idxmax(), float(por_dia.max())), 'peor_dia': (por_dia.idxmin(), float(por_dia.min())),
+            'n_valor': len(v), 'neto_valor': float(v.resultado.sum()), 'acierto_valor': float(v.acierto.mean()),
+            'por_tier': a.groupby('tier').agg(n=('resultado', 'size'), neto=('resultado', 'sum'), acierto=('acierto', 'mean')),
+            'por_bo': a.groupby('bo_type').agg(n=('resultado', 'size'), neto=('resultado', 'sum'), acierto=('acierto', 'mean'))}
+
+
+def plata(x, signo=False):
+    s = num(abs(x))
+    return (('+' if x >= 0 else '−') if signo else ('−' if x < 0 else '')) + '$' + s
+
+
+def textos_apuesta(ra, desde, hasta, ruta):
+    t = ra['por_tier']
+    tiers = '; '.join(f"tier {g.TIER_NOMBRE[k].split(' ')[0]}: {plata(r.neto, True)} en {num(r.n)} apuestas"
+                      for k, r in t.loc[[x for x in g.TIERS if x in t.index]].iterrows())
+    return dict(
+        ap_desde=f'{desde:%d/%m/%Y}', ap_hasta=f'{hasta:%d/%m/%Y a las %H:%M} UTC', ap_archivo=ruta.name,
+        ap_n_mes=num(ra['n_mes']), ap_n_cuota=num(ra['n_cuota']), ap_n_sin=num(ra['n_sin']),
+        ap_apostado=plata(ra['apostado']), ap_neto=plata(abs(ra['neto'])), ap_cobrado=plata(ra['cobrado']),
+        ap_verbo='ganabas' if ra['neto'] >= 0 else 'perdías', ap_veredicto='Sí' if ra['neto'] > 0 else 'No',
+        ap_roi=pct(abs(ra['roi'])), ap_acierto=pct(ra['acierto']), ap_equilibrio=f"{ra['equilibrio']:.2f}".replace('.', ','),
+        ap_med_ok=f"{ra['mediana_acierta']:.2f}".replace('.', ','), ap_med_err=f"{ra['mediana_falla']:.2f}".replace('.', ','),
+        ap_extrema=pct(ra['pct_extrema'], 0), ap_fav_gana=pct(ra['fav_casa_gana'], 0),
+        ap_neto_fav=plata(ra['neto_fav_casa'], True), ap_n_fav=num(ra['n_fav_casa']),
+        ap_roi_fav=('+' if ra['neto_fav_casa'] >= 0 else '−') + pct(abs(ra['neto_fav_casa']) / (APUESTA * ra['n_fav_casa'])),
+        ap_dias=num(ra['dias']), ap_dias_pos=num(ra['dias_positivos']),
+        ap_peor_dia=f"{ra['peor_dia'][0]:%d/%m}", ap_peor_dia_neto=plata(ra['peor_dia'][1], True),
+        ap_mejor_dia=f"{ra['mejor_dia'][0]:%d/%m}", ap_mejor_dia_neto=plata(ra['mejor_dia'][1], True),
+        ap_n_valor=num(ra['n_valor']), ap_neto_valor=plata(ra['neto_valor'], True), ap_acierto_valor=pct(ra['acierto_valor'], 0),
+        ap_tiers=tiers)
+
+
+def datos_apuesta(b):
+    a = b[b.con_cuota].sort_values('start_at_utc')
+    mapas = lambda r: f'{int(r.post_team_a_maps_won)}-{int(r.post_team_b_maps_won)}' if pd.notna(r.post_team_a_maps_won) else ''
+    return pd.DataFrame({
+        'id': a.match_id, 't': a.start_at_utc.dt.strftime('%Y-%m-%dT%H:%M:00Z'),
+        'fecha': a.start_at_utc.dt.strftime('%d/%m %H:%M'), 'dia': a.start_at_utc.dt.strftime('%d/%m'),
+        'a': a.team_a_name, 'b': a.team_b_name, 'torneo': a.tournament_name.str.strip(),
+        'tier': a.tier.map(g.TIER_NOMBRE), 'bo': 'BO' + a.bo_type.astype(str),
+        'pick': a.pick, 'conf': a.confianza.round(4), 'cuota': a.cuota_pick, 'cuota_r': a.cuota_rival,
+        'ok': a.acierto.astype(int), 'res': a.resultado.round(2), 'valor': a.valor.astype(int),
+        'ganador': a.ganador, 'mapas': a.apply(mapas, axis=1)})
+
+
+def g_apuesta(ap):
+    csv = ap.to_csv(index=False)
+    datos = alt.InlineData(values=csv, format=alt.DataFormat(type='csv', parse={
+        'id': 'number', 'conf': 'number', 'cuota': 'number', 'cuota_r': 'number', 'ok': 'number', 'res': 'number',
+        'valor': 'number', 't': 'date'}))
+    E = '#c-apuesta'
+    tier_ap = alt.param(name='tier_ap', value='Todos', bind=alt.binding_select(
+        options=['Todos'] + g.TIER_ORDEN[:4], name='Tier ', element=E))
+    bo_ap = alt.param(name='bo_ap', value='Todos', bind=alt.binding_select(
+        options=['Todos', 'BO1', 'BO3', 'BO5'], name='Formato ', element=E))
+    estrategia = alt.param(name='estrategia', value='Siempre', bind=alt.binding_radio(
+        options=['Siempre', 'Sólo con valor'], labels=['Siempre al pronóstico', 'Sólo si la cuota tiene valor'],
+        name='Cuándo apostar ', element=E))
+    equipo_ap = alt.param(name='equipo_ap', value='', bind=alt.binding(
+        input='search', name='Equipo ', placeholder='p. ej. Vitality', element=E))
+    conf_ap = alt.param(name='conf_ap', value=50, bind=alt.binding_range(
+        min=50, max=95, step=5, name='Confianza mínima del modelo (%) ', element=E))
+    dia = alt.selection_point(name='dia', fields=['dia'], on='click', clear='dblclick', empty=True)
+
+    f_tier = "(tier_ap == 'Todos' || datum.tier == tier_ap)"
+    f_bo = "(bo_ap == 'Todos' || datum.bo == bo_ap)"
+    f_resto = ("(estrategia == 'Siempre' || datum.valor == 1)"
+               " && (equipo_ap == '' || indexof(lower(datum.a + ' ' + datum.b), lower(equipo_ap)) >= 0)"
+               " && datum.conf * 100 >= conf_ap")
+    base = alt.Chart(datos).transform_calculate(
+        sin_dia=f'{f_tier} && {f_bo} && {f_resto}', sin_tier=f'{f_bo} && {f_resto}', sin_bo=f'{f_tier} && {f_resto}')
+    base = base.transform_calculate(en_filtro="datum.sin_dia && (!length(data('dia_store')) || vlSelectionTest('dia_store', datum))")
+
+    # ---- conclusión que cambia con cada filtro
+    agg = base.transform_filter('datum.en_filtro').transform_aggregate(
+        n='count()', neto='sum(res)', ok='sum(ok)').transform_calculate(
+        gano='datum.neto >= 0',
+        l1=("datum.n == 0 ? 'Ningún partido cumple el filtro' : (datum.neto >= 0 ? 'GANASTE $' : 'PERDISTE $') + "
+            "format(abs(datum.neto), ',.0f')"),
+        l2=("datum.n == 0 ? '' : 'Apostaste $" + str(APUESTA) + " en ' + format(datum.n, ',') + "
+            "(datum.n == 1 ? ' partido' : ' partidos') + ' ($' + format(datum.n * " + str(APUESTA) + ", ',') + '). "
+            "El modelo acertó ' + format(datum.ok, ',') + ' (' + format(datum.ok / datum.n * 100, '.0f') + "
+            "' %) y la casa te devolvió $' + format(datum.n * " + str(APUESTA) + " + datum.neto, ',.0f') + "
+            "': ' + (datum.neto >= 0 ? 'ganaste el ' : 'perdiste el ') + format(abs(datum.neto) / (datum.n * " + str(APUESTA) + ") * 100, '.1f') + "
+            "' % de lo apostado.'"))
+    concl = (agg.mark_text(align='left', baseline='top', fontSize=30, fontWeight='bold', font=g.FUENTE_HUD).encode(
+                 text='l1:N', x=alt.value(0), y=alt.value(0),
+                 color=alt.condition('datum.gano', alt.value(g.COLOR_OK), alt.value(g.COLOR_ERR)))
+             + agg.mark_text(align='left', baseline='top', fontSize=14, color=g.TINTA, limit=900).encode(
+                 text='l2:N', x=alt.value(0), y=alt.value(38))).properties(width=900, height=58)
+
+    # ---- saldo acumulado a lo largo del mes
+    saldo = base.transform_filter('datum.en_filtro').transform_window(
+        saldo='sum(res)', sort=[alt.SortField('t')], frame=[None, 0]).transform_calculate(
+        frase=("'Después de ' + datum.a + ' vs. ' + datum.b + ' llevabas ' + (datum.saldo >= 0 ? '+' : '−') + '$' + "
+               "format(abs(datum.saldo), ',.0f')"))
+    cero = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(color=g.GRIS, strokeDash=[4, 3]).encode(y='y:Q')
+    linea = (saldo.mark_area(line={'color': g.ACENTO, 'strokeWidth': 2}, color=g.ACENTO, opacity=0.12, interpolate='step-after').encode(
+        x=alt.X('t:T', title=None, scale=alt.Scale(type='utc'), axis=alt.Axis(format='%d/%m', labelOverlap=True)),
+        y=alt.Y('saldo:Q', title='Saldo acumulado ($)', axis=alt.Axis(format=',.0f'), stack=None),
+        tooltip=[alt.Tooltip('frase:N', title='Saldo'), alt.Tooltip('fecha:N', title='Fecha (UTC)')])
+        + cero).properties(width=900, height=170, title=alt.Title(
+            'Tu saldo, partido a partido', subtitle='Arranca en $0 el primer día del período y suma o resta cada apuesta de $100.',
+            anchor='start', fontSize=14, subtitleColor=g.GRIS))
+
+    # ---- un punto por partido: cuánto dejó cada apuesta
+    frase = ("(datum.ok ? 'Habrías GANADO $' + format(datum.res, ',.2f') : 'Habrías PERDIDO $" + str(APUESTA) + "')"
+             " + ' apostando $" + str(APUESTA) + " a ' + datum.pick + ' (cuota ' + format(datum.cuota, '.2f') + ')'")
+    puntos = base.transform_calculate(frase=frase, quien="datum.ok ? 'Ganaste la apuesta' : 'Perdiste la apuesta'",
+                                      en_n='datum.en_filtro ? 1 : 0').mark_circle(size=42).encode(
+        x=alt.X('t:T', title='Inicio de la serie (UTC)', scale=alt.Scale(type='utc'), axis=alt.Axis(format='%d/%m', labelOverlap=True)),
+        y=alt.Y('res:Q', title='Resultado de la apuesta ($)', scale=alt.Scale(type='symlog', constant=10, domain=[-110, 1600]),
+                axis=alt.Axis(values=[-100, -10, 0, 10, 100, 1000], format=',.0f')),
+        color=alt.condition('datum.en_filtro', alt.Color('quien:N', title=None, scale=alt.Scale(
+            domain=['Ganaste la apuesta', 'Perdiste la apuesta'], range=[g.COLOR_OK, g.COLOR_ERR]),
+            legend=alt.Legend(orient='top-right')), alt.value(g.APAGADO)),
+        opacity=alt.condition('datum.en_filtro', alt.value(0.85), alt.value(0.5)),
+        order=alt.Order('en_n:Q'),
+        tooltip=[alt.Tooltip('frase:N', title='Si hubieses apostado'), alt.Tooltip('fecha:N', title='Fecha (UTC)'),
+                 alt.Tooltip('a:N', title='Equipo A'), alt.Tooltip('b:N', title='Equipo B'),
+                 alt.Tooltip('torneo:N', title='Torneo'), alt.Tooltip('tier:N', title='Tier'), alt.Tooltip('bo:N', title='Formato'),
+                 alt.Tooltip('conf:Q', title='Confianza del modelo', format='.0%'),
+                 alt.Tooltip('cuota_r:Q', title='Cuota del rival', format='.2f'),
+                 alt.Tooltip('ganador:N', title='Ganó'), alt.Tooltip('mapas:N', title='Mapas A-B')])
+    nube = (puntos + cero).properties(width=900, height=260, title=alt.Title(
+        'Cada partido, una apuesta', subtitle='Arriba de la línea, lo que ganaste; abajo, los $100 que perdiste. Pasá el mouse por un punto.',
+        anchor='start', fontSize=14, subtitleColor=g.GRIS))
+
+    # ---- neto por día (clic para quedarse con un día)
+    barras_dia = base.transform_filter('datum.sin_dia').transform_aggregate(
+        neto='sum(res)', n='count()', fecha_d='min(t)', groupby=['dia']).transform_calculate(
+        signo="datum.neto >= 0 ? 'Día ganador' : 'Día perdedor'",
+        frase=("'El ' + datum.dia + ' habrías ' + (datum.neto >= 0 ? 'ganado' : 'perdido') + ' $' + format(abs(datum.neto), ',.0f') + "
+               "' en ' + datum.n + ' apuestas'")
+    ).mark_bar(cornerRadius=2).encode(
+        x=alt.X('dia:O', title='Día (clic para elegir uno, doble clic para volver al mes)', sort=alt.EncodingSortField('fecha_d'),
+                axis=alt.Axis(labelAngle=-90)),
+        y=alt.Y('neto:Q', title='Neto del día ($)', axis=alt.Axis(format=',.0f')),
+        color=alt.Color('signo:N', title=None, scale=alt.Scale(domain=['Día ganador', 'Día perdedor'], range=[g.COLOR_OK, g.COLOR_ERR]),
+                        legend=None),
+        opacity=alt.condition(dia, alt.value(0.95), alt.value(0.3)),
+        tooltip=[alt.Tooltip('frase:N', title='Ese día')]).add_params(dia).properties(width=900, height=150, title=alt.Title(
+            'Día por día', subtitle='Cada barra es lo que dejaron las apuestas de ese día.', anchor='start', fontSize=14, subtitleColor=g.GRIS))
+
+    # ---- por tier y por formato (cada uno ignora su propio filtro, para poder comparar)
+    def corte(campo, filtro, orden, titulo):
+        agr = base.transform_filter(f'datum.{filtro}').transform_aggregate(
+            neto='sum(res)', n='count()', groupby=[campo]).transform_calculate(
+            signo="datum.neto >= 0 ? 'g' : 'p'",
+            et="(datum.neto >= 0 ? '+$' : '−$') + format(abs(datum.neto), ',.0f') + '  (' + datum.n + ')'",
+            frase=("'En ' + (" + f"'{campo}' == 'tier' ? 'tier ' : '') + datum." + campo + " + ', siguiendo al modelo habrías ' + "
+                   "(datum.neto >= 0 ? 'ganado' : 'perdido') + ' $' + format(abs(datum.neto), ',.0f') + ' en ' + datum.n + ' apuestas'"))
+        enc_y = alt.Y(f'{campo}:N', sort=orden, scale=alt.Scale(domain=orden), title=None)
+        return (agr.mark_bar(cornerRadiusEnd=3, height=18).encode(
+            x=alt.X('neto:Q', title='Neto ($)', axis=alt.Axis(format=',.0f', tickCount=4)), y=enc_y,
+            color=alt.Color('signo:N', scale=alt.Scale(domain=['g', 'p'], range=[g.COLOR_OK, g.COLOR_ERR]), legend=None),
+            tooltip=[alt.Tooltip('frase:N', title=titulo)])
+            + agr.mark_text(align='left', dx=8, fontSize=12.5, color=g.TINTA).encode(
+                x=alt.value(330), y=enc_y, text='et:N')).properties(width=330, height=alt.Step(28), title=alt.Title(
+                    titulo, anchor='start', fontSize=14))
+
+    por_tier = corte('tier', 'sin_tier', g.TIER_ORDEN[:4], 'Por tier')
+    por_bo = corte('bo', 'sin_bo', ['BO1', 'BO3', 'BO5'], 'Por formato')
+    return alt.vconcat(concl, linea, nube, barras_dia, alt.hconcat(por_tier, por_bo, spacing=150), spacing=26).add_params(
+        tier_ap, bo_ap, estrategia, equipo_ap, conf_ap).resolve_scale(color='independent').configure_view(stroke=None)
+
+
 def cm_tiers(train):
     return [t for t in g.TIERS if t in set(train.tier)]
 
@@ -521,7 +737,7 @@ LOCALE_TIEMPO = {"dateTime": "%A, %e de %B de %Y, %X", "date": "%d/%m/%Y", "time
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--cache', action='store_true', help='reusar resultados/grillas.pkl si existe')
+    ap.add_argument('--cache', action='store_true', help='reusar resultados/busqueda_v4.pkl si existe')
     ap.add_argument('--sin-huella', action='store_true', help='no exigir la huella del CSV de la Entrega 2')
     ap.add_argument('--csv', default=None, help='por defecto: datos/matches_latest.csv o la salida del DAG')
     args = ap.parse_args()
@@ -563,20 +779,6 @@ def main():
     ex = datos_explorar(train, test, p_val, fold_val, p_test)
     acc_val_oof = ex[ex.periodo == 'Validación cruzada'].ok.mean()
 
-    print('5 · Otros modelos en el test (contexto)…')
-    otros = {}
-    for nombre in cm.ORDEN_SIMPLICIDAD:
-        if nombre == 'regresión logística':
-            otros[nombre] = p_test
-            continue
-        clf = clone(cm.FAMILIAS[nombre]).set_params(**{k.replace('clasificador__', ''): v
-                                                       for k, v in grillas[nombre]['params'].items()})
-        otros[nombre] = cm.armar(clf, cm.COLUMNAS_FINAL).fit(train[cm.COLUMNAS_FINAL], y_train).predict_proba(
-            test[cm.COLUMNAS_FINAL])[:, 1]
-    acierta = pd.DataFrame({n: ((p >= 0.5).astype(int) == y_test.to_numpy()) for n, p in otros.items()})
-    falla_todos = (~acierta).all(axis=1)
-    test_otros = acierta.mean()
-
     print('6 · Gráficos y página…')
     equipos, cruces, hoy = foto_de_equipos(df)
     graficos = {
@@ -585,6 +787,11 @@ def main():
     }
     gp, rangos = g_proba(f, train, None)
     graficos['g-proba'] = gp
+    rc = ruta_cuotas()
+    assert rc is not None, 'Faltan las cuotas: python app/bajar_cuotas.py (ver README).'
+    apuesta, ap_desde, ap_hasta = backtest(detalle, test, pd.read_csv(rc))
+    ra = resumen_apuesta(apuesta)
+    graficos['g-apuesta'] = g_apuesta(datos_apuesta(apuesta))
     # Sin «$schema»: la página trae Vega-Lite 6 y Vega 6, y así vega-embed compila cada gráfico con
     # esas versiones en lugar de avisar que fue escrito para Vega-Lite 5.
     specs = {k: {c: x for c, x in v.to_dict().items() if c != '$schema'} for k, v in graficos.items()}
@@ -618,7 +825,12 @@ def main():
     numeros = {'accuracy_test': float(acc_test), 'accuracy_cv': float(res_cv['accuracy']),
                'desvio_cv': float(res_cv['desvío']), 'series_test': int(len(test)),
                'intercepto': f['intercepto'], 'piso_test': float(piso_test),
-               'errores_sorpresa': float(sorpresa_err), 'generado': datetime.now().isoformat(timespec='seconds')}
+               'errores_sorpresa': float(sorpresa_err),
+               'apuesta': {k: v for k, v in ra.items() if k not in ('por_tier', 'por_bo', 'mejor_dia', 'peor_dia')},
+               'modelos_validacion': {f: {'variante': comp.loc[f, 'variante'], 'accuracy': float(comp.loc[f, 'accuracy']),
+                                          'desvio': float(comp.loc[f, 'desvío']), 'accuracy_train': float(comp.loc[f, 'accuracy train'])}
+                                      for f in cm.ORDEN_SIMPLICIDAD},
+               'generado': datetime.now().isoformat(timespec='seconds')}
     assert abs(numeros['accuracy_cv'] - tabla_grilla.iloc[0].mean_test_accuracy) < 1e-12
 
     # ---- textos y tablas de los «Cómo lo sabemos»
@@ -634,14 +846,14 @@ def main():
                              'Recall A': pct, 'Recall B': pct})
     grillas_cortas = []
     for nombre in cm.ORDEN_SIMPLICIDAD:
-        t = grillas[nombre]['tabla'].head(3)
+        t = grillas[nombre]['grilla'].head(3)
         for _, fila in t.iterrows():
-            params = ', '.join(f"{c} = {str(fila[c]).replace('.', ',')}" for c in t.columns if not c.startswith(('mean_', 'std_', 'rank_')))
-            grillas_cortas.append({'Familia': g.NOMBRE_MODELO[nombre], 'Combinación': params,
+            params = ', '.join(f"{c} = {fmt_valor(fila[c])}" for c in t.columns if not c.startswith(('mean_', 'std_', 'rank_')))
+            grillas_cortas.append({'Familia': g.NOMBRE_MODELO[nombre], 'Variante': grillas[nombre]['variante'], 'Combinación': params,
                                    'Accuracy': pm(fila.mean_test_accuracy, fila.std_test_accuracy),
                                    'En entrenamiento': pct(fila.mean_train_accuracy),
                                    'Puesto': int(fila.rank_test_accuracy),
-                                   'Probadas': len(grillas[nombre]['tabla'])})
+                                   'Probadas': len(grillas[nombre]['grilla'])})
     tabla_grillas = tabla_html(pd.DataFrame(grillas_cortas))
     tg = tabla_grilla.copy()
     tg['Accuracy'] = [pm(a, s, 2) for a, s in zip(tg.mean_test_accuracy, tg.std_test_accuracy)]
@@ -650,8 +862,6 @@ def main():
     tabla_ajuste = tabla_html(tg, ['C', 'class_weight', 'Accuracy', 'Recall A', 'Recall B'],
                               {'C': lambda v: str(v).replace('.', ',')})
     tabla_tipos = tabla_html(pd.DataFrame(tipos))
-    tabla_otros = tabla_html(pd.DataFrame({'Modelo': [g.NOMBRE_MODELO[n] for n in test_otros.index],
-                                           'Accuracy en el test': [pct(v) for v in test_otros.values]}))
     tabla_coefs = tabla_html(pd.DataFrame({'Variable (escalada)': [c.split('__')[1] for c in coefs.index[:8]],
                                            'Coeficiente': [f'{v:+.3f}'.replace('.', ',') for v in coefs.values[:8]]}))
     em = embudo_pipeline(len(df))
@@ -696,8 +906,9 @@ def main():
         acc_test=pct(acc_test), piso_test=pct(piso_test), dif_piso=f'{100 * (acc_test - piso_test):.1f}'.replace('.', ','),
         acc_cv=pm(res_cv['accuracy'], res_cv['desvío']), n_test=num(len(test)), n_train=num(len(train)),
         sorpresa_err=pct(sorpresa_err, 0), sorpresa_err_n=round(10 * sorpresa_err),
-        sorpresas_test=pct(detalle.sorpresa.mean(), 0),
-        acc_no_sorpresa=pct(detalle[~detalle.sorpresa].acierto.mean(), 0), acc_sorpresa=pct(detalle[detalle.sorpresa].acierto.mean(), 0),
+        sorpresas_test=pct(detalle.sorpresa.mean()), sorpresa_err_dec=pct(sorpresa_err),
+        n_empates_test=num(int(detalle.sorpresa.isna().sum())),
+        acc_no_sorpresa=pct(detalle[detalle.sorpresa.eq(0)].acierto.mean()), acc_sorpresa=pct(detalle[detalle.sorpresa.eq(1)].acierto.mean()),
         conf80=pct(tc.iloc[-1].accuracy, 0), conf_baja=pct(tc.iloc[0].accuracy, 0), n80=num(tc.iloc[-1].series),
         alta_acc=pct(alta.acierto.mean(), 0), alta_n=num(len(alta)),
         gana_fav=pct(gana_fav, 0), n_elo=num(n_elo), empates_elo=num(len(df) - n_elo),
@@ -708,8 +919,9 @@ def main():
         log_acc=pm(comp.loc['regresión logística', 'accuracy'], comp.loc['regresión logística', 'desvío']),
         limite=pct(limite, 2), arbol_acc=pm(comp.loc['árbol de decisión', 'accuracy'], comp.loc['árbol de decisión', 'desvío']),
         rf_train=pct(comp.loc['random forest', 'accuracy train']), rf_acc=pm(comp.loc['random forest', 'accuracy'], comp.loc['random forest', 'desvío']),
-        arbol_prof=grillas['árbol de decisión']['params']['clasificador__max_depth'], piso_cv=pct(comp.loc['piso', 'accuracy']),
-        falla_todos=pct(falla_todos.mean(), 0), falla_todos_err=pct(falla_todos[~acierta['regresión logística']].mean(), 0),
+        n_ajustes=num(sum(int(np.prod([len(v) for v in cm.GRILLAS[f].values()])) for f in cm.ORDEN_SIMPLICIDAD)
+                      * len(cm.VARIANTES) * cm.N_SPLITS),
+        arbol_prof=grillas['árbol de decisión']['parámetros']['clasificador__max_depth'], piso_cv=pct(comp.loc['piso', 'accuracy']),
         calib_media=pct(calib_media), calib_real=pct(calib_real),
         peor_mes=['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre',
                   'noviembre', 'diciembre'][peor_mes.month - 1], peor_mes_acc=pct(mensual.loc[peor_mes, 'mean']),
@@ -726,9 +938,10 @@ def main():
         h5_n=num(h['H5']['n']), h5_bo1=pct(h['H5']['bo1']), h5_global=pct(h['H5']['global']), h5_sep=dec(h['H5']['sep']),
         extraccion=EXTRACCION, publicada=PUBLICADA,
         acc_val_oof=pct(acc_val_oof), n_ex=num(len(ex)), piso_test_num=float(piso_test),
+        **textos_apuesta(ra, ap_desde, ap_hasta, rc),
     )
     html = pagina(ctx, specs, rangos, equipos, cruces, tabla_pasos, tabla_comp, tabla_grillas, tabla_ajuste,
-                  tabla_tipos, tabla_otros, tabla_coefs, tabla_folds_html, alta, detalle)
+                  tabla_tipos, tabla_coefs, tabla_folds_html, alta, detalle)
     SALIDA.mkdir(exist_ok=True)
     (SALIDA / 'index.html').write_text(html, encoding='utf-8')
     (SALIDA / 'numeros.json').write_text(json.dumps(numeros, indent=2, ensure_ascii=False), encoding='utf-8')
@@ -794,7 +1007,7 @@ def sliders_html(rangos):
 
 
 def pagina(c, specs, rangos, equipos, cruces, tabla_pasos, tabla_comp, tabla_grillas, tabla_ajuste, tabla_tipos,
-           tabla_otros, tabla_coefs, tabla_folds, alta, detalle):
+           tabla_coefs, tabla_folds, alta, detalle):
     caso = c['caso']
     # El título que afirma va en el <h2> de la sección; el gráfico se queda con su subtítulo.
     titulos = {}
@@ -802,14 +1015,14 @@ def pagina(c, specs, rangos, equipos, cruces, tabla_pasos, tabla_comp, tabla_gri
         titulos[k] = specs[k]['title']['text']
         specs[k]['title'] = {'text': specs[k]['title'].get('subtitle', ''), 'fontSize': 13, 'fontWeight': 'normal',
                              'color': g.GRIS, 'anchor': 'start', 'offset': 14}
-    inactivos = ('ninguno de los dos había jugado en los 30 días anteriores'
+    inactivos = ('ninguno de los dos tenía partidos registrados en los 30 días anteriores'
                  if (caso.team_a_matches_last30d == 0 and caso.team_b_matches_last30d == 0)
                  else f'{caso.favorito} venía de jugar {int(caso.team_a_matches_last30d if caso.predicho == 1 else caso.team_b_matches_last30d)} series en los 30 días anteriores')
     valores = {k: v for k, v in c.items() if k not in ('caso', 'piso_test_num')}
     valores.update(
         t_datos=titulos['g-datos'], t_hallazgo=titulos['g-hallazgo'], t_confianza=titulos['g-confianza'],
         tabla_pasos=tabla_pasos, tabla_comp=tabla_comp, tabla_grillas=tabla_grillas, tabla_ajuste=tabla_ajuste,
-        tabla_tipos=tabla_tipos, tabla_otros=tabla_otros, tabla_coefs=tabla_coefs, tabla_folds=tabla_folds,
+        tabla_tipos=tabla_tipos, tabla_coefs=tabla_coefs, tabla_folds=tabla_folds,
         sliders=sliders_html(rangos),
         opciones=''.join(f'<option value="{e["id"]}">{e["n"]} · Elo {e["elo"]:.0f}</option>' for e in equipos),
         pipeline=''.join(f'<li><b>{a}.</b> {b}</li>' for a, b in PIPELINE),

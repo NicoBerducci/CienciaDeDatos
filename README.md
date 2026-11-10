@@ -11,7 +11,7 @@ Berducci Nicolás · Genaulaz Martin · Yanardi Tomás · Yanardi Juan Cruz · G
 |---|---|---|
 | 1 y 2 | Pipeline de Airflow: Bo3.gg → Bronze → Intermediate → Silver (política de calidad v3, detallada abajo) | `dags/` |
 | 2 | EDA, cinco hipótesis y redundancia | `entrega 2/` |
-| 3 (corregida) | Modelado: cuatro familias con su grilla, logística final, dónde y por qué falla | `entrega 3/` |
+| 3 | Modelado: cuatro familias, nueve variantes de columnas y sus grillas; logística final; dónde y por qué falla | `entrega 3/` |
 | 4 | La aplicación y cómo se genera | `app/` (código) y `docs/` (página publicada) |
 
 Cómo regenerar la aplicación y cómo llega el modelo al navegador: ver [`app/README.md`](app/README.md).
