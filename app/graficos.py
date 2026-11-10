@@ -186,7 +186,17 @@ def g_modelos(tabla, elegido='regresión logística'):
         'Las cuatro familias, cada una con su mejor ajuste: la logística queda a menos de un desvío de la mejor',
         subtitle=[f'El {NOMBRE_MODELO[mejor].lower()} da {pct(dif, 2).replace(" %", "")} puntos más que la logística, '
                   f'menos que su desvío ({pct(tabla.loc[mejor, "desvío"], 2).replace(" %", "")}).',
-                  'Mismas 27 columnas, mismos 5 folds temporales, cada familia con su grilla completa.']))
+                  texto_variantes(tabla)]))
+
+
+def texto_variantes(tabla):
+    if 'variante' not in tabla:
+        return 'Mismas columnas y mismos 5 folds temporales, cada familia con su grilla.'
+    elegidas = tabla.drop(index='piso')
+    if elegidas.variante.nunique() == 1:
+        return (f'Cada familia con su mejor variante de columnas (las cuatro eligieron «{elegidas.variante.iloc[0]}», '
+                f'{int(elegidas.columnas.iloc[0])} columnas) y su grilla, en los mismos 5 folds temporales.')
+    return 'Cada familia con su mejor variante de columnas y su grilla, en los mismos 5 folds temporales.'
 
 
 def tabla_confianza(detalle):

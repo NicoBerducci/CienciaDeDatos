@@ -180,13 +180,14 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <div class="marca"><svg style="color:var(--acento)"><use href="#mira"/></svg>
     <div>¿Quién gana la serie?<small>CS2 · Ciencia de Datos UTN FRM · 5K10 · Grupo 07</small></div></div>
   <nav class="rondas">
-    <a href="#portada"><span>00</span>Briefing</a>
+    <a href="#portada"><span>00</span>El proyecto</a>
     <a href="#datos"><span>01</span>Los datos</a>
     <a href="#hallazgos"><span>02</span>Hallazgo</a>
     <a href="#modelo"><span>03</span>El modelo</a>
     <i class="sep"></i>
     <a class="copa" href="#explora"><span>OT</span>Explorá</a>
     <a class="copa" href="#proba"><span>OT</span>Pick'em</a>
+    <a class="copa" href="#apuesta"><span>OT</span>La apuesta</a>
   </nav>
   <div class="marcador" title="Series del test: aciertos y errores del modelo"><span class="ok">[[n_aciertos]]</span><i>aciertos<br>errores</i><span class="err">[[n_errores]]</span></div>
 </header>
@@ -195,9 +196,9 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
 
 <section id="portada">
   <svg class="mira-grande" style="color:var(--acento)"><use href="#mira"/></svg>
-  <div class="etiqueta"><span class="num">00</span><span class="nombre">Briefing · el proyecto</span></div>
+  <div class="etiqueta"><span class="num">00</span><span class="nombre">El proyecto</span></div>
   <h1>¿Quién gana la serie?</h1>
-  <p class="sub-h1">¿Se puede saber quién gana una serie de Counter-Strike 2 antes de que empiece?</p>
+  <p class="sub-h1">En un enfrentamiento entre dos equipos de Counter-Strike 2, ¿Quién será el vencedor?</p>
   <p class="lead">Antes de cada serie profesional ya hay números: el Elo de cada equipo, su ranking, cómo viene jugando,
   cuántos partidos lleva, si cambió jugadores, cómo le fue contra ese rival. Si el que llega mejor suele ganar,
   esos números tendrían que anticipar el resultado. Los juntamos para [[n]] series y le preguntamos a un modelo.</p>
@@ -207,7 +208,7 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <div class="nums">
     <div class="num"><span class="tag">Acierto en el test</span><span>[[acc_test]]</span><p>de las [[n_test]] series que el modelo nunca vio, contra [[piso_test]] del piso que dice siempre «gana A»</p></div>
     <div class="num"><span class="tag">Cuando está seguro</span><span>[[conf80]]</span><p>de aciertos cuando le da 80 % o más a un equipo ([[n80]] series)</p></div>
-    <div class="num"><span class="tag">Errores que son sorpresas</span><span>[[sorpresa_err]]</span><p>de los errores: ganó el que llegaba con menos Elo</p></div>
+    <div class="num"><span class="tag">Errores que son sorpresas</span><span>[[sorpresa_err]]</span><p>de los errores en series con Elo distinto: ganó el que llegaba con menos Elo</p></div>
   </div>
   <div class="barra-marcador">
     <div class="titulos"><span class="ok">Aciertos · [[n_aciertos]]</span><span class="err">[[n_errores]] · Errores</span></div>
@@ -231,7 +232,7 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
     <h4>De dónde salen y cómo se obtienen</h4>
     <ol>[[pipeline]]</ol>
     <p>Fecha de los datos: extracción <code>[[extraccion]]</code>, publicada el [[publicada]]; la última serie empezó el [[hasta]].
-    Es la misma de las Entregas 2 y 3: <code>build_app.py</code> controla su huella SHA-256 antes de usarla.</p>
+    Es la misma de las Entregas 2 y 3.</p>
     <h4>Qué es una fila</h4>
     <p>Una serie entre dos equipos (<code>match_id</code> único). El objetivo es <code>target_team_a_won</code>: 1 si ganó A, 0 si ganó B.
     A gana el 53,6 % de las series. Como las filas están ordenadas en el tiempo y se quiere predecir el futuro, todo se separa por fecha, nunca al azar.</p>
@@ -250,8 +251,6 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
       <tr><td>Redundancia</td><td>Contadores idénticos (6) y columnas con |ρ de Spearman| ≥ 0,8 o fórmula directa de otra (20).</td><td>27</td></tr>
       <tr><td>Modelado (Entrega 3)</td><td>Los 9 contadores <code>_count</code>: sacarlos no cambia la accuracy más que el ruido.</td><td>18</td></tr>
     </tbody></table></div>
-    <p>Para descartar fugas escondidas, el Elo, los winrates, la tendencia, el descanso y los cruces directos se recalcularon desde cero
-    usando sólo series que terminaron antes de cada partido: coinciden con el Silver en las [[n]] filas.</p>
   </details>
 </section>
 
@@ -267,7 +266,7 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <details><summary>Cómo lo sabemos <small>las hipótesis de la Entrega 2: una que se sostuvo y dos que no</small></summary>
     <p>Las hipótesis se midieron en la Entrega 2 con la función <code>separacion</code> de la cátedra (distancia entre ganadores y perdedores,
     en desvíos) y su semáforo: menos de 0,2 es rojo, más de 0,8 es verde. Se midieron sólo en el tramo de entrenamiento ([[h_tramo]] series anteriores al 01/03/2026),
-    para no elegir columnas mirando el período que después se usa para evaluar. Los números de abajo los recalcula <code>build_app.py</code> con el mismo código.</p>
+    para no elegir columnas mirando el período que después se usa para evaluar.</p>
     <h4>El Elo del gráfico (H2): separa, pero no alcanza solo</h4>
     <p>Separación <b>[[h2_sep]], [[h2_zona]]</b>, sobre [[h2_n]] series, con el signo esperado: cuando gana A, A llegaba en promedio con [[h2_a]] puntos más de Elo;
     cuando gana B, con [[h2_b]] menos. Partiendo por tier: [[h2_tiers]], todos amarillos (el tier D da [[h2_d]], pero son [[h2_d_n]] series).
@@ -294,13 +293,13 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
 <section id="modelo">
   <div class="etiqueta"><span class="num">Mapa 3/3</span><span class="nombre">El modelo</span></div>
   <h2>Una regresión logística acierta el [[acc_test]] de las series nuevas, y ningún modelo más complejo le gana por más que el ruido</h2>
-  <p>Comparamos cuatro familias de modelos, cada una con su propia búsqueda de hiperparámetros, con las mismas columnas y la misma
-  validación cruzada temporal: el modelo siempre entrena con el pasado y se mide con lo que viene. La métrica es la <b>accuracy</b>,
+  <p>Comparamos cuatro familias de modelos. Cada una probó las mismas nueve variantes de columnas, cada variante con su propia búsqueda
+  de hiperparámetros, y todas con la misma validación cruzada temporal: el modelo siempre entrena con el pasado y se mide con lo que viene. La métrica es la <b>accuracy</b>,
   cuántas series de cada 100 acierta.</p>
   <div class="grafico" id="g-modelos"></div>
   <p class="mirar"><b>Qué mirar</b> Los cuatro puntos están casi encimados, y todos lejos del piso. Más complejidad no compró aciertos:
   el random forest acierta [[rf_train]] en el entrenamiento y [[rf_acc]] en validación, porque memoriza series que no se repiten.
-  Con el empate, nos quedamos con el más simple, que además es el único que se puede escribir como fórmula adentro de esta página.</p>
+  Con el empate, nos quedamos con el más simple.</p>
   <h3 class="sub">[[t_confianza]]</h3>
   <div class="grafico" id="g-confianza"></div>
   <p class="mirar"><b>Qué mirar</b> Las barras suben con la confianza, y la rayita blanca —lo que el modelo dijo— queda pegada al borde de cada barra —lo que pasó—.
@@ -322,12 +321,17 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
     y valida con los ~5 meses siguientes, y se purga cualquier serie cuyo resultado todavía no se conocía. La imputación, el escalado y
     el <code>log1p</code> están adentro del pipeline, así que se vuelven a aprender en cada fold.</p>
     [[tabla_folds]]
-    <h4>La comparación: cuatro familias, cada una con su grilla</h4>
-    <p>Regla fijada de antemano: si un modelo más complejo no le gana a la logística por más de un desvío, se queda la logística.
-    El mejor promedio es el [[mejor]] ([[mejor_acc]]); su límite es [[limite]], y la logística ([[log_acc]]) queda adentro.
-    El árbol de decisión ([[arbol_acc]]) queda afuera: su mejor versión es un árbol de sólo [[arbol_prof]] niveles, porque con más profundidad memoriza.</p>
+    <h4>La comparación: cuatro familias, nueve variantes de columnas, cada una con su grilla</h4>
+    <p>Cada familia probó las mismas nueve variantes de columnas (la base de 27, sin Elo, sin ranking, sin H2H, sin estabilidad, sin contadores,
+    agregar el winrate de 20, reemplazar rondas por winrate de 20 e historia sin <code>log1p</code>), y cada variante volvió a buscar sus mejores
+    hiperparámetros: [[n_ajustes]] ajustes en los folds. Dentro de cada familia se eligió la variante con menos columnas entre las que quedan a menos
+    de un desvío de la mejor: las cuatro eligieron <b>sin contadores</b>, de 18 columnas.</p>
+    <p>Después, la regla fijada de antemano: entre los representantes que quedan a menos de un desvío del mejor, se prefiere el más simple
+    (logística, árbol, bosque, boosting). El mejor promedio es el [[mejor]] ([[mejor_acc]]); su límite es [[limite]], y la logística ([[log_acc]]) queda adentro.
+    El árbol de decisión ([[arbol_acc]]) queda afuera: su mejor versión es un árbol de sólo [[arbol_prof]] niveles, porque con más profundidad mejora en
+    entrenamiento pero empeora en validación.</p>
     [[tabla_comp]]
-    <p>Las tres mejores combinaciones de cada grilla (todas están en el notebook):</p>
+    <p>Las tres mejores combinaciones de la grilla de cada familia en su variante elegida (todas las variantes y combinaciones están en el notebook):</p>
     [[tabla_grillas]]
     <h4>El ajuste del elegido</h4>
     <p>Con las 18 columnas finales, la grilla de la logística: <code>C</code> casi no cambia nada (no estaba sobreajustando), y
@@ -335,28 +339,23 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
     [[tabla_ajuste]]
     <h4>El resultado en el test</h4>
     <p>Accuracy [[acc_test]] en las [[n_test]] series del test, contra [[piso_test]] del piso: [[dif_piso]] puntos más. En validación había dado [[acc_cv]]:
-    el test no muestra que ese número estuviera inflado. Una vez congelado todo, medimos también a los otros tres en el mismo test, sólo como contexto:</p>
-    [[tabla_otros]]
+    el test no muestra que ese número estuviera inflado.</p>
     <h4>Dónde se equivoca, y por qué</h4>
     <ul>
-      <li><b>En las sorpresas.</b> El [[sorpresas_test]] de las series del test las ganó el equipo que llegaba con menos Elo. Ahí el modelo acierta
-      el [[acc_sorpresa]]; en el resto, el [[acc_no_sorpresa]]. El [[sorpresa_err]] de sus errores son sorpresas.</li>
+      <li><b>En las sorpresas.</b> Entre las series del test con Elo distinto, el [[sorpresas_test]] las ganó el equipo que llegaba con menos Elo
+      (los [[n_empates_test]] empates de Elo quedan afuera de esta cuenta). Ahí el modelo acierta el [[acc_sorpresa]]; en el resto, el [[acc_no_sorpresa]].
+      Las sorpresas concentran el [[sorpresa_err_dec]] de los errores de ese grupo.</li>
       <li><b>Cuando duda.</b> Con confianza de 50–55 % acierta el [[conf_baja]]. Sus errores se juntan en las series parejas.</li>
-      <li><b>No es culpa de la logística.</b> El [[falla_todos_err]] de sus errores también los cometen el árbol, el random forest y el boosting:
-      fallan en las mismas series. Lo que falta es información, no complejidad.</li>
-      <li><b>No hay una señal que avise.</b> Entre las [[alta_n]] series donde el modelo dio 70 % o más, los errores y los aciertos tienen el mismo perfil:
-      favorito inactivo, alineación cambiada, sin ranking, tier A o BO1 aparecen en proporciones parecidas (tabla en el notebook, sección 11.2.5).
-      Lo que decide esas series —el veto de mapas, un jugador enfermo, el rendimiento del día— no está en los datos.</li>
       <li><b>Por tipo de partido</b>, falla más en tier A, donde el Elo separa menos, y en [[peor_mes]], después del parón de mitad de año ([[peor_mes_acc]]).</li>
     </ul>
     [[tabla_tipos]]
     <p><b>Un error concreto.</b> [[caso_a]] vs. [[caso_b]] ([[caso_fecha]], [[caso_torneo]]): el modelo le dio [[caso_conf]] a [[caso_fav]], que llegaba
-    con [[caso_elo]] puntos más de Elo, y ganó [[caso_ganador]] [[caso_mapas]]. [[caso_inactivos_cap]]: todas sus estadísticas describían
-    cómo jugaban más de un mes antes.</p>
+    con [[caso_elo]] puntos más de Elo, y ganó [[caso_ganador]] [[caso_mapas]]. [[caso_inactivos_cap]]: las estadísticas podían describir
+    un nivel viejo. Es una explicación posible; los datos no permiten asegurar la causa.</p>
     <p><b>¿Las probabilidades dicen la verdad?</b> Casi. Por tramo de confianza, lo que dice el modelo y lo que pasa coinciden (gráfico de arriba).
     En promedio le da a A [[calib_media]] y A gana [[calib_real]]: el <code>class_weight="balanced"</code> corre las probabilidades unos dos puntos hacia B, a propósito.</p>
     <h4>En qué se apoya</h4>
-    <p>Sobre todo en la diferencia de Elo: desordenarla en el test baja la accuracy más de 5 puntos, el triple que cualquier otra columna.
+    <p>Sobre todo en la diferencia de Elo: desordenarla en el test baja la accuracy 5,38 puntos, más del triple que cualquier otra columna (el ranking, 1,46).
     Después vienen el ranking, la experiencia de cada equipo y el winrate de rondas. Los coeficientes (positivo empuja hacia «gana A»):</p>
     [[tabla_coefs]]
     <p>El Elo no es una fuga: se recalculó desde cero con resultados anteriores y coincide con el Silver en todas las filas.</p>
@@ -411,10 +410,48 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   Elo, partidos previos, forma, tendencia y actividad se recalculan con todas sus series terminadas; rondas, mismo formato, mismo tier, alineación y ranking
   son el último valor registrado. El cruce directo sale de sus últimos 5 enfrentamientos.</p>
 </section>
+<section id="apuesta" class="copa">
+  <div class="etiqueta"><span class="num">OT 3</span><span class="nombre">La apuesta · un mes con plata de verdad</span></div>
+  <h2>[[ap_veredicto]]: apostando $100 a cada pronóstico del modelo durante un mes, [[ap_verbo]] [[ap_neto]]</h2>
+  <p>Tomamos el último mes del dataset —las series que empezaron entre el <b>[[ap_desde]]</b> y el <b>[[ap_hasta]]</b>, la última que tenemos—,
+  le pedimos a Bo3.gg lo que pagaba la casa de apuestas en cada una y simulamos lo más simple: $100 al equipo que elegía el modelo, siempre.
+  El número violeta que muestra Bo3.gg (por ejemplo, <b>$184</b>) es lo que la casa devuelve por $100: los $100 apostados más $84 de ganancia, una cuota de 1,84.
+  De las [[ap_n_mes]] series del mes, [[ap_n_cuota]] tenían cuota; en las otras [[ap_n_sin]] Bo3.gg no tiene cuota y no se apuesta.</p>
+  <p>Resultado: apostaste [[ap_apostado]], la casa te devolvió [[ap_cobrado]] y te quedaste con <b>[[ap_neto]] menos</b>
+  ([[ap_roi]] de lo apostado). El modelo acertó el [[ap_acierto]] de esas apuestas —parecido al [[acc_test]] de todo el test—, pero acertar no alcanza:
+  cuando acertaba, la cuota mediana era [[ap_med_ok]] (ganabas unos centavos), y cuando fallaba perdías los $100 enteros.
+  Sólo [[ap_dias_pos]] de [[ap_dias]] días terminaron en positivo.</p>
+  <div class="controles" id="c-apuesta"></div>
+  <div class="grafico" id="g-apuesta"></div>
+  <p class="nota">Probá: elegí un tier o un formato y mirá cómo cambia la cuenta de arriba; hacé clic en un día para ver sólo sus apuestas;
+  buscá a tu equipo. «Sólo si la cuota tiene valor» apuesta únicamente cuando la probabilidad del modelo por la cuota da más de 1, la regla del Pick'em.
+  Por tier, con todas las apuestas: [[ap_tiers]].</p>
+  <details><summary>Cómo lo sabemos <small>de dónde salen las cuotas y por qué la casa gana</small></summary>
+  <p><b>Las cuotas.</b> Bo3.gg arma su página de resultados con una consulta por día a su API
+  (<code>api.bo3.gg/api/v2/matches/finished?date=…</code>); cada serie trae un bloque <code>bet_updates</code> con la cuota decimal de cada equipo en Thunderpick,
+  la casa asociada. Pedimos los días del 14/09 al 16/10 (un día de más a cada lado, porque Bo3.gg agrupa por fecha de inicio)
+  y unimos por el identificador de la serie: las [[ap_n_mes]] series del mes aparecen todas. Las cuotas quedan en <code>datos/[[ap_archivo]]</code>.</p>
+  <p><b>Las predicciones.</b> Son las del test: el modelo final, entrenado sólo con series anteriores al corte, sin volver a entrenar.
+  Cada apuesta es de $100 al equipo con más probabilidad según el modelo; si gana, cobra $100 × cuota; si pierde, pierde los $100.</p>
+  <p><b>Por qué se pierde.</b> Para no perder, con un [[ap_acierto]] de aciertos hace falta que la cuota promedio de lo que se acierta sea al menos
+  [[ap_equilibrio]] (1 dividido el acierto). La que pagaba la casa cuando el modelo acertaba fue, en la mediana, [[ap_med_ok]]; cuando fallaba, [[ap_med_err]].
+  La casa ya sabía quién era el favorito y le pagaba casi nada.</p>
+  <p><b>Una advertencia sobre las cuotas.</b> Bo3.gg guarda la <i>última</i> cuota que publicó la casa, no la de antes del partido. En el [[ap_extrema]]
+  de las series uno de los dos equipos terminó con cuota 1,06 o menos, y en varias los dos quedaron en 1,001 (mercado cerrado): señal de que la casa siguió moviendo la cuota durante la serie, con el marcador a la vista.
+  Por eso el favorito de la casa ganó el [[ap_fav_gana]] de las [[ap_n_fav]] series con favorito, muy por encima del [[acc_test]] de nuestro modelo, que sí predice antes de empezar,
+  y aun así apostar siempre a ese favorito dejaba apenas [[ap_neto_fav]] en [[ap_n_fav]] apuestas ([[ap_roi_fav]] de lo apostado). Estas cuotas castigan al que acierta: lo que medimos es cuánto se habría ganado
+  cobrando lo que Bo3.gg muestra hoy, no lo que se podía conseguir antes de cada serie, que Bo3.gg no conserva.</p>
+  <p><b>La regla del valor.</b> Apostando sólo cuando la probabilidad del modelo por la cuota supera 1 quedan [[ap_n_valor]] apuestas, el modelo acierta el
+  [[ap_acierto_valor]] y el mes cierra en [[ap_neto_valor]]: la cuota «con valor» casi siempre era la de un equipo que la casa ya veía perdiendo.</p>
+  <p><b>Conclusión.</b> Con lo que pagaba la casa, seguir al modelo no da ganancia: acierta 2 de cada 3 series, pero sus aciertos son los mismos que ve
+  la casa, que los paga poco. Para ganarle haría falta acertar donde la casa se equivoca, y ahí el modelo es más débil
+  (las sorpresas: las series que gana el de menos Elo). El mejor día fue el [[ap_mejor_dia]] ([[ap_mejor_dia_neto]]); el peor, el [[ap_peor_dia]] ([[ap_peor_dia_neto]]).</p>
+  </details>
+</section>
 </main>
 
 <footer>Ciencia de Datos · UTN FRM · 2026 · Comisión 5K10 · Grupo 07 · Datos: Bo3.gg, series del [[desde]] al [[hasta]].
-Generado por <code>build_app.py</code> desde el repositorio del grupo. Tipografías Rajdhani y Barlow (licencia SIL OFL).
+Generado desde el repositorio del grupo. Tipografías Rajdhani y Barlow (licencia SIL OFL).
 Counter-Strike 2 es una marca de Valve Corporation; este es un trabajo académico sin relación con Valve ni con Bo3.gg.</footer>
 
 <script>[[js_vega]]</script>

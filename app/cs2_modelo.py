@@ -75,13 +75,12 @@ CONTADORES = [c for c in COLUMNAS_E2 if c.endswith('_count')]
 COLUMNAS_FINAL = [c for c in COLUMNAS_E2 if c not in CONTADORES]
 
 # ----------------------------------------------------------------------------
-# Las cuatro familias y sus grillas (corrección de la Entrega 3)
+# Las cuatro familias, sus grillas y las variantes de columnas (Entrega 3, v4)
 # ----------------------------------------------------------------------------
 FAMILIAS = {
     'regresión logística': LogisticRegression(max_iter=5000, random_state=SEMILLA),
     'árbol de decisión': DecisionTreeClassifier(random_state=SEMILLA),
-    'random forest': RandomForestClassifier(n_estimators=200, max_features='sqrt', n_jobs=1,
-                                            random_state=SEMILLA),
+    'random forest': RandomForestClassifier(n_estimators=150, n_jobs=1, random_state=SEMILLA),
     'gradient boosting': HistGradientBoostingClassifier(early_stopping=False, random_state=SEMILLA),
 }
 GRILLAS = {
@@ -90,15 +89,35 @@ GRILLAS = {
     'árbol de decisión': {'clasificador__max_depth': [3, 4, 6, 8, 10, 14],
                           'clasificador__min_samples_leaf': [1, 50, 200],
                           'clasificador__class_weight': [None, 'balanced']},
-    'random forest': {'clasificador__max_depth': [6, 10, 14],
-                      'clasificador__min_samples_leaf': [10, 50],
+    'random forest': {'clasificador__max_depth': [6, 12],
+                      'clasificador__min_samples_leaf': [10, 30],
+                      'clasificador__max_features': ['sqrt', 0.7],
                       'clasificador__class_weight': [None, 'balanced']},
-    'gradient boosting': {'clasificador__learning_rate': [0.03, 0.1],
-                          'clasificador__max_leaf_nodes': [7, 15, 31],
-                          'clasificador__max_iter': [100, 300],
-                          'clasificador__class_weight': [None, 'balanced']},
+    'gradient boosting': {'clasificador__learning_rate': [0.05, 0.1],
+                          'clasificador__max_iter': [100, 200],
+                          'clasificador__max_leaf_nodes': [7, 15],
+                          'clasificador__l2_regularization': [0.0, 1.0]},
 }
 ORDEN_SIMPLICIDAD = ['regresión logística', 'árbol de decisión', 'random forest', 'gradient boosting']
+
+
+def _sin(columnas):
+    return [c for c in COLUMNAS_E2 if c not in columnas]
+
+
+BASE = 'base (27 de la E2)'
+# Las nueve variantes de columnas que prueba cada familia, cada una con su propia grilla.
+VARIANTES = {
+    BASE: (COLUMNAS_E2, True),
+    'sin Elo': (_sin(['elo_advantage_a']), True),
+    'sin ranking': (_sin(['ranking_score_advantage_a']), True),
+    'agregamos winrate 20': (COLUMNAS_E2 + [EXTRA], True),
+    'winrate 20 en vez de rondas': ([EXTRA if c == 'round_winrate_last20_advantage_a' else c for c in COLUMNAS_E2], True),
+    'sin H2H': (_sin(['h2h_team_a_winrate_last5', 'h2h_last5_count']), True),
+    'sin estabilidad': (_sin([c for c in COLUMNAS_E2 if 'lineup_stability' in c]), True),
+    'sin contadores': (_sin(CONTADORES), True),
+    'historia sin log': (COLUMNAS_E2, False),
+}
 
 # Hiperparámetros del modelo final, congelados en la sección 10 del notebook.
 PARAMS_FINAL = {'C': 0.01, 'class_weight': 'balanced'}
@@ -233,6 +252,39 @@ def predicciones_fuera_de_fold(pipeline, X, y, cv):
     return p, fold
 
 
+def buscar_familias(train, cv, avisar=print):
+    """Sección 8 y 9 del notebook: cada familia prueba las 9 variantes, cada una con su grilla.
+
+    Dentro de cada familia se elige la variante con menos columnas entre las que quedan a menos
+    de un desvío de la mejor; después se comparan los cuatro representantes.
+    """
+    from sklearn.model_selection import GridSearchCV
+    X, y = train[COLUMNAS_E2 + [EXTRA]], train.target_team_a_won
+    salida = {}
+    for familia in ORDEN_SIMPLICIDAD:
+        filas, tablas = [], {}
+        for nombre, (columnas, usar_log) in VARIANTES.items():
+            avisar(f'  {familia} · {nombre}')
+            b = GridSearchCV(armar(FAMILIAS[familia], columnas, usar_log), GRILLAS[familia], scoring=SCORING,
+                             refit=False, cv=cv, n_jobs=N_JOBS, return_train_score=True, error_score='raise').fit(X, y)
+            r = b.cv_results_
+            i = int(np.argmax(r['mean_test_accuracy']))
+            tablas[nombre] = tabla_de(b)
+            filas.append({'variante': nombre, 'columnas': len(columnas), 'accuracy': r['mean_test_accuracy'][i],
+                          'desvío': r['std_test_accuracy'][i], 'accuracy train': r['mean_train_accuracy'][i],
+                          'f1 macro': r['mean_test_f1_macro'][i], 'recall A': r['mean_test_recall_A'][i],
+                          'recall B': r['mean_test_recall_B'][i], 'parámetros': r['params'][i],
+                          'folds': [r[f'split{k}_test_accuracy'][i] for k in range(N_SPLITS)]})
+        t = pd.DataFrame(filas).set_index('variante')
+        mejor = t.accuracy.idxmax()
+        limite = t.loc[mejor, 'accuracy'] - t.loc[mejor, 'desvío']
+        elegida = t[t.accuracy >= limite].sort_values(['columnas', 'accuracy'], ascending=[True, False],
+                                                       kind='stable').index[0]
+        salida[familia] = {'variantes': t, 'variante': elegida, 'grilla': tablas[elegida],
+                           'grillas': tablas, **t.loc[elegida].to_dict()}
+    return salida
+
+
 def entrenar_final(train):
     """El modelo congelado: logística, 18 columnas, C = 0,01, balanced, con todo el entrenamiento."""
     modelo = armar(LogisticRegression(max_iter=5000, random_state=SEMILLA, **PARAMS_FINAL),
@@ -352,8 +404,11 @@ def detalle_predicciones(datos, proba):
     d['tramo_confianza'] = pd.cut(d.confianza, TRAMOS_CONFIANZA, labels=ETIQUETAS_CONFIANZA, right=False)
     d['dif_elo_abs'] = d.elo_advantage_a.abs()
     d['tramo_elo'] = pd.cut(d.dif_elo_abs, TRAMOS_ELO, labels=ETIQUETAS_ELO, right=False)
-    # Sorpresa: ganó el equipo que llegaba con menos Elo.
-    d['sorpresa'] = np.where(d.elo_advantage_a >= 0, d.real == 0, d.real == 1)
+    # Sorpresa: ganó el equipo que llegaba con menos Elo. Con Elo igual no hay favorito: queda NaN.
+    comparables = d.elo_advantage_a.notna() & d.elo_advantage_a.ne(0)
+    d['sorpresa'] = np.nan
+    d.loc[comparables, 'sorpresa'] = d.loc[comparables, 'real'].ne(
+        d.loc[comparables, 'elo_advantage_a'].gt(0).astype(int)).astype(float)
     fav_a = d.predicho == 1
     d['favorito'] = np.where(fav_a, d.team_a_name, d.team_b_name)
     d['no_favorito'] = np.where(fav_a, d.team_b_name, d.team_a_name)

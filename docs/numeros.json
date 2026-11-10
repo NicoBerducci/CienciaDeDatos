@@ -5,6 +5,54 @@
   "series_test": 8819,
   "intercepto": 0.05637011317267061,
   "piso_test": 0.5450731375439393,
-  "errores_sorpresa": 0.8148991541964866,
-  "generado": "2026-11-08T16:20:38"
+  "errores_sorpresa": 0.8188950637463224,
+  "apuesta": {
+    "n_mes": 1210,
+    "n_cuota": 783,
+    "n_sin": 427,
+    "apostado": 78300,
+    "neto": -18879.7,
+    "cobrado": 59420.3,
+    "roi": -0.24112005108556833,
+    "acierto": 0.6462324393358876,
+    "equilibrio": 1.5474308300395256,
+    "mediana_acierta": 1.03,
+    "mediana_falla": 3.535,
+    "pct_extrema": 0.5632183908045977,
+    "fav_casa_gana": 0.8793103448275862,
+    "neto_fav_casa": 445.9,
+    "n_fav_casa": 696,
+    "dias": 31,
+    "dias_positivos": 4,
+    "n_valor": 266,
+    "neto_valor": -15929.3,
+    "acierto_valor": 0.21804511278195488
+  },
+  "modelos_validacion": {
+    "regresión logística": {
+      "variante": "sin contadores",
+      "accuracy": 0.6315074729024236,
+      "desvio": 0.006927094755929868,
+      "accuracy_train": 0.6196500866723949
+    },
+    "árbol de decisión": {
+      "variante": "sin contadores",
+      "accuracy": 0.6237214013738593,
+      "desvio": 0.009687068478430772,
+      "accuracy_train": 0.6128143102009
+    },
+    "random forest": {
+      "variante": "sin contadores",
+      "accuracy": 0.6328875996901517,
+      "desvio": 0.008193172620784558,
+      "accuracy_train": 0.7141215475878206
+    },
+    "gradient boosting": {
+      "variante": "sin contadores",
+      "accuracy": 0.6313307485707217,
+      "desvio": 0.011957971752486715,
+      "accuracy_train": 0.6467477313366483
+    }
+  },
+  "generado": "2026-11-10T02:46:59"
 }

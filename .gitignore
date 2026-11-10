@@ -24,3 +24,4 @@ airflow.db
 app/resultados/
 **/__pycache__/
 .ipynb_checkpoints/
+!/datos/cuotas_bo3_*.csv
