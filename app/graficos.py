@@ -75,29 +75,46 @@ def tabla_meses(df):
 
 
 def g_datos(df):
-    """Series por mes, apiladas por tier, con el corte del test marcado."""
+    """Series por mes, apiladas por tier, con el entrenamiento y la prueba marcados como dos zonas."""
     t = tabla_meses(df)
+    corte = cm.CORTE_TEST.tz_convert(None)
+    inicio = t.mes.min() - pd.Timedelta(days=16)
+    fin = t.mes.max() + pd.Timedelta(days=46)
+    tr, te, _ = cm.separar(df)
+    n_train, n_test = len(tr), len(te)
+    zonas = pd.DataFrame({'x': [inicio, corte], 'x2': [corte, fin],
+                          'zona': ['Entrenamiento', 'Prueba'],
+                          't1': ['ENTRENAMIENTO', 'PRUEBA'],
+                          't2': [f'el modelo aprende de estas {num(n_train)} series',
+                                 f'{num(n_test)} series que el modelo nunca vio']})
+    fondo = alt.Chart(zonas).mark_rect(opacity=0.09).encode(
+        x=alt.X('x:T'), x2='x2:T',
+        color=alt.Color('zona:N', scale=alt.Scale(domain=['Entrenamiento', 'Prueba'], range=[ACENTO, COLOR_ERR]), legend=None))
+    rot1 = alt.Chart(zonas).mark_text(align='left', dx=8, y=14, fontSize=13, fontWeight='bold', font=FUENTE_HUD).encode(
+        x='x:T', text='t1:N',
+        color=alt.Color('zona:N', scale=alt.Scale(domain=['Entrenamiento', 'Prueba'], range=[ACENTO, COLOR_ERR]), legend=None))
+    rot2 = alt.Chart(zonas).mark_text(align='left', dx=8, y=30, fontSize=11.5, color=GRIS).encode(x='x:T', text='t2:N')
     base = alt.Chart(t)
     barras = base.mark_bar().encode(
-        x=alt.X('yearmonth(mes):T', title=None, axis=alt.Axis(format='%b %Y', labelAngle=0, tickCount=7)),
-        y=alt.Y('sum(series):Q', title='Series por mes'),
-        color=alt.Color('tier_n:N', title='Tier del torneo', scale=ESC_TIER, sort=TIER_ORDEN,
+        x=alt.X('yearmonth(mes):T', title='Mes y año en que se jugó la serie',
+                scale=alt.Scale(domain=[inicio.isoformat(), fin.isoformat()]),
+                axis=alt.Axis(format='%b %Y', labelAngle=0, tickCount=7)),
+        y=alt.Y('sum(series):Q', title='Cantidad de series jugadas en el mes', scale=alt.Scale(domainMax=float(t.groupby('mes').series.sum().max() * 1.22))),
+        color=alt.Color('tier_n:N', title='Tier (nivel) del torneo', scale=ESC_TIER, sort=TIER_ORDEN,
                         legend=alt.Legend(orient='top', direction='horizontal')),
         order=alt.Order('orden:Q'),
         tooltip=[alt.Tooltip('yearmonth(mes):T', title='Mes', format='%B %Y'),
                  alt.Tooltip('tier_n:N', title='Tier'), alt.Tooltip('series:Q', title='Series', format=',')],
     ).transform_calculate(orden=f"indexof({TIER_ORDEN}, datum.tier_n)")
-    corte = pd.DataFrame({'mes': [cm.CORTE_TEST.tz_convert(None)], 't': ['empieza el test →']})
-    regla = alt.Chart(corte).mark_rule(color=COLOR_ERR, strokeDash=[5, 3], strokeWidth=2).encode(x='mes:T')
-    texto = alt.Chart(corte).mark_text(align='left', dx=6, dy=-4, color=COLOR_ERR, fontSize=13).encode(
-        x='mes:T', y=alt.value(8), text='t:N')
+    regla = alt.Chart(pd.DataFrame({'mes': [corte]})).mark_rule(color=COLOR_ERR, strokeDash=[5, 3], strokeWidth=2).encode(x='mes:T')
     n = len(df)
     fuera = df.tier.isin(['b', 'c']).mean()
-    return (barras + regla + texto).properties(width=680, height=280, title=alt.Title(
-        f'{num(n)} series en tres años, y {round(10 * fuera)} de cada 10 se juegan en tiers B y C',
-        subtitle=[f'Cada barra es un mes; el color, el nivel del torneo según Bo3.gg. La élite (S) y el tier A '
-                  f'suman el {pct(df.tier.isin(["s", "a"]).mean())}.',
-                  'Todo lo anterior a la línea roja es entrenamiento; lo posterior, el test que el modelo nunca vio.']))
+    return alt.layer(fondo, barras, regla, rot1, rot2).resolve_scale(color='independent').properties(
+        width=680, height=300, title=alt.Title(
+            f'{num(n)} series en tres años, y {round(10 * fuera)} de cada 10 se juegan en tiers B y C',
+            subtitle=[f'Cada barra es un mes y su altura, cuántas series profesionales se jugaron; los colores dicen en qué tier (nivel de torneo).',
+                      f'La élite (S) y el tier A suman el {pct(df.tier.isin(["s", "a"]).mean())}. '
+                      f'La línea roja ({cm.CORTE_TEST:%d/%m/%Y}) separa las series de entrenamiento de las de prueba.']))
 
 
 # ---------------------------------------------------------------------------
@@ -235,3 +252,72 @@ def g_confianza(detalle):
         subtitle=[f'Las {num(len(detalle))} series del test, agrupadas por la probabilidad que el modelo le dio a su favorito.',
                   'La rayita blanca es esa probabilidad media: casi toca el borde de cada barra, así que cuando dice 70 % acierta 7 de 10.',
                   'Adentro de cada barra, la cuota mínima a la que apostar siempre al favorito deja de perder plata.']))
+
+
+# ---------------------------------------------------------------------------
+# Contra los modelos que no piensan, y la matriz de confusión
+# ---------------------------------------------------------------------------
+NOMBRE_TONTO = {'B': 'Siempre «gana B»', 'A': 'Siempre «gana A»', 'modelo': 'Nuestro modelo'}
+
+
+def g_tontos(t):
+    """t: columnas modelo, periodo ('Validación cruzada' | 'Prueba'), accuracy."""
+    orden = [NOMBRE_TONTO[k] for k in ['B', 'A', 'modelo']]
+    periodos = ['Validación cruzada', 'Prueba']
+    esc = alt.Scale(domain=periodos, range=['#8b96a5', ACENTO])
+    y = alt.Y('nombre:N', sort=orden, title=None, axis=alt.Axis(labelLimit=200, labelFontSize=13))
+    base = alt.Chart(t).transform_calculate(texto="replace(format(datum.accuracy * 100, '.1f'), '.', ',') + ' %'")
+    barras = base.mark_bar(cornerRadiusEnd=3, height=14).encode(
+        x=alt.X('accuracy:Q', title='Series acertadas de cada 100', scale=alt.Scale(domain=[0, 1]),
+                axis=alt.Axis(format='.0%', values=[0, 0.25, 0.5, 0.75, 1])),
+        y=y, yOffset=alt.YOffset('periodo:N', sort=periodos, scale=alt.Scale(domain=periodos)),
+        color=alt.Color('periodo:N', scale=esc, sort=periodos, title=None, legend=alt.Legend(orient='bottom')),
+        tooltip=[alt.Tooltip('nombre:N', title='Modelo'), alt.Tooltip('periodo:N', title='Medido en'),
+                 alt.Tooltip('accuracy:Q', title='Acierta', format='.1%')])
+    texto = base.mark_text(align='left', dx=6, fontSize=12, color=TINTA).encode(
+        x='accuracy:Q', y=y, yOffset=alt.YOffset('periodo:N', sort=periodos, scale=alt.Scale(domain=periodos)), text='texto:N')
+    moneda = alt.Chart(pd.DataFrame({'x': [0.5], 't': ['tirar una moneda: 50 %']}))
+    regla = moneda.mark_rule(color=GRIS, strokeDash=[4, 3]).encode(x='x:Q')
+    rot = moneda.mark_text(align='left', dx=5, y=-8, color=GRIS, fontSize=11).encode(x='x:Q', text='t:N')
+    m = t[(t.modelo == 'modelo') & (t.periodo == 'Prueba')].accuracy.iloc[0]
+    a = t[(t.modelo == 'A') & (t.periodo == 'Prueba')].accuracy.iloc[0]
+    return alt.layer(barras, texto, regla, rot).properties(width=600, height=alt.Step(46), title=alt.Title(
+        f'El modelo acierta {round(100 * (m - a))} series más de cada 100 que el mejor de los modelos que no piensan',
+        subtitle=['Un modelo «tonto» (dummy) da siempre la misma respuesta, sin mirar ningún dato. Es la vara mínima:',
+                  'un modelo que no le gana a eso no sirve.']))
+
+
+def tabla_matriz(real, pred):
+    filas = []
+    for r, nr in [(1, 'Ganó A'), (0, 'Ganó B')]:
+        tot = int((real == r).sum())
+        for p_, npred in [(1, 'Dijo «gana A»'), (0, 'Dijo «gana B»')]:
+            n = int(((real == r) & (pred == p_)).sum())
+            acierto = r == p_
+            nombre = {(1, 1): 'Verdadero positivo', (1, 0): 'Falso negativo',
+                      (0, 1): 'Falso positivo', (0, 0): 'Verdadero negativo'}[(r, p_)]
+            filas.append({'real': nr, 'pred': npred, 'n': n, 'fila': n / tot if tot else 0, 'ok': 'Acierto' if acierto else 'Error',
+                          'nombre': nombre, 't_n': num(n), 't_p': f'{pct(n / tot if tot else 0, 0)} de las que {nr.lower()}'})
+    return pd.DataFrame(filas)
+
+
+def g_matriz(tablas):
+    """tablas: lista de (título, DataFrame de tabla_matriz). Una matriz por modelo, lado a lado."""
+    reales, preds = ['Ganó A', 'Ganó B'], ['Dijo «gana A»', 'Dijo «gana B»']
+    paneles = []
+    for i, (titulo, t) in enumerate(tablas):
+        base = alt.Chart(t)
+        x = alt.X('pred:N', sort=preds, title='Lo que dijo el modelo' if i == 1 else None,
+                  axis=alt.Axis(orient='top', labelAngle=0, labelFontSize=12))
+        y = alt.Y('real:N', sort=reales, title='Lo que pasó' if i == 0 else None,
+                  axis=alt.Axis(labels=i == 0, ticks=False, labelFontSize=12))
+        celda = base.mark_rect(stroke=FONDO, strokeWidth=3).encode(
+            x=x, y=y, color=alt.Color('ok:N', scale=ESC_RESULTADO, legend=None),
+            opacity=alt.Opacity('fila:Q', scale=alt.Scale(domain=[0, 1], range=[0.15, 0.95]), legend=None),
+            tooltip=[alt.Tooltip('nombre:N', title='Casilla'), alt.Tooltip('real:N', title='Lo que pasó'),
+                     alt.Tooltip('pred:N', title='Lo que dijo'), alt.Tooltip('n:Q', title='Series', format=','),
+                     alt.Tooltip('t_p:N', title='Proporción')])
+        n = base.mark_text(fontSize=19, fontWeight='bold', dy=-9, color=TINTA, font=FUENTE_HUD).encode(x=x, y=y, text='t_n:N')
+        nom = base.mark_text(fontSize=10.5, dy=11, color=TINTA).encode(x=x, y=y, text='nombre:N')
+        paneles.append(alt.layer(celda, n, nom).properties(width=230, height=170, title=alt.Title(titulo, fontSize=14, anchor='middle')))
+    return alt.hconcat(*paneles, spacing=18).resolve_scale(color='shared', opacity='shared')

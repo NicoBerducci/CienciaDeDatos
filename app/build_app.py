@@ -540,6 +540,46 @@ def resumen_apuesta(b):
             'por_bo': a.groupby('bo_type').agg(n=('resultado', 'size'), neto=('resultado', 'sum'), acierto=('acierto', 'mean'))}
 
 
+MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+DESCRIPCION_TIER = {'s': 'La élite: los torneos más importantes del mundo, con los mejores equipos y los premios más grandes.',
+                    'a': 'Torneos internacionales grandes, un escalón abajo, y clasificatorios para los Majors.',
+                    'b': 'La segunda división: ligas regionales y circuitos de equipos que pelean por subir.',
+                    'c': 'Ligas y copas menores, muchas online, con equipos semiprofesionales.',
+                    'd': 'Torneos locales y abiertos: casi no aparecen en los datos.'}
+
+
+def textos_juego(df, k=32, inicial=1500):
+    """Los números de «El juego»: formatos, tiers con ejemplos reales y un ejemplo de Elo con la fórmula del DAG."""
+    bo = df.bo_type.value_counts(normalize=True)
+    tarjetas = []
+    for t in g.TIERS:
+        d = df[df.tier == t]
+        ej = d.tournament_name.str.strip().value_counts().index[:2].tolist()
+        tarjetas.append(f'<div><b>{t.upper()}</b>{DESCRIPCION_TIER[t]}<small>{pct(len(d) / len(df))} de las series · '
+                        f'p. ej. {html_esc(ej[0])}{" y " + html_esc(ej[1]) if len(ej) > 1 else ""}</small></div>')
+    a, b = inicial + 100, inicial
+    esperado = 1 / (1 + 10 ** ((b - a) / 400))
+    m = df.start_at_utc.dt.tz_convert(None)
+    return dict(pct_bo3=pct(bo.get(3, 0), 0), pct_bo1=pct(bo.get(1, 0), 0), tiers_html=''.join(tarjetas),
+                pct_gana_a=pct(df.target_team_a_won.mean()),
+                elo_ej_a=num(a), elo_ej_b=num(b), elo_ej_p=pct(esperado, 0),
+                elo_ej_gana=f'{k * (1 - esperado):.1f}'.replace('.', ','), elo_ej_pierde=f'{k * esperado:.1f}'.replace('.', ','),
+                desde_mes=f'{MESES[m.min().month - 1]} de {m.min().year}', hasta_mes=f'{MESES[m.max().month - 1]} de {m.max().year}')
+
+
+def html_esc(x):
+    return str(x).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def textos_calibracion(tc):
+    """Un tramo de ejemplo para explicar la calibración con números: el de 70–80 % si existe."""
+    fila = tc[tc.tramo.str.startswith('70')]
+    fila = (fila if len(fila) else tc.iloc[[len(tc) // 2]]).iloc[0]
+    dif = [abs(r.accuracy - r.confianza) for r in tc.itertuples()]
+    return dict(cal_tramo=fila.tramo, cal_n=num(fila.series), cal_dijo=pct(fila.confianza, 0), cal_paso=pct(fila.accuracy, 0),
+                cal_max=f'{100 * max(dif):.1f}'.replace('.', ','))
+
+
 def plata(x, signo=False):
     s = num(abs(x))
     return (('+' if x >= 0 else '−') if signo else ('−' if x < 0 else '')) + '$' + s
@@ -779,11 +819,30 @@ def main():
     ex = datos_explorar(train, test, p_val, fold_val, p_test)
     acc_val_oof = ex[ex.periodo == 'Validación cruzada'].ok.mean()
 
+    print('5 · Modelos que no piensan y matriz de confusión…')
+    tontos = []
+    for clave, constante in [('A', 1), ('B', 0)]:
+        r_cv, _ = cm.medir(cm.armar(DummyClassifier(strategy='constant', constant=constante), cm.COLUMNAS_E2), X_train, y_train, cv)
+        tontos += [{'modelo': clave, 'periodo': 'Validación cruzada', 'accuracy': r_cv['accuracy']},
+                   {'modelo': clave, 'periodo': 'Prueba', 'accuracy': float((y_test == constante).mean())}]
+    tontos += [{'modelo': 'modelo', 'periodo': 'Validación cruzada', 'accuracy': res_cv['accuracy']},
+               {'modelo': 'modelo', 'periodo': 'Prueba', 'accuracy': float(acc_test)}]
+    tontos = pd.DataFrame(tontos).assign(nombre=lambda d: d.modelo.map(g.NOMBRE_TONTO))
+    acc_tonto = tontos.set_index(['modelo', 'periodo']).accuracy
+    assert abs(acc_tonto['A', 'Prueba'] - piso_test) < 1e-12 and abs(acc_tonto['A', 'Validación cruzada'] - comp.loc['piso', 'accuracy']) < 1e-12
+    real = detalle.real.to_numpy()
+    matrices = [('Siempre «gana A»', g.tabla_matriz(real, np.ones_like(real))),
+                ('Nuestro modelo', g.tabla_matriz(real, detalle.predicho.to_numpy())),
+                ('Siempre «gana B»', g.tabla_matriz(real, np.zeros_like(real)))]
+    mm = matrices[1][1].set_index('nombre').n
+    vp, fn, fp, vn = (int(mm[k]) for k in ['Verdadero positivo', 'Falso negativo', 'Falso positivo', 'Verdadero negativo'])
+
     print('6 · Gráficos y página…')
     equipos, cruces, hoy = foto_de_equipos(df)
     graficos = {
         'g-datos': g.g_datos(df), 'g-hallazgo': g.g_hallazgo(df), 'g-modelos': g.g_modelos(comp),
         'g-confianza': g.g_confianza(detalle), 'g-explora': g_explora(ex),
+        'g-tontos': g.g_tontos(tontos), 'g-matriz': g.g_matriz(matrices),
     }
     gp, rangos = g_proba(f, train, None)
     graficos['g-proba'] = gp
@@ -826,6 +885,8 @@ def main():
                'desvio_cv': float(res_cv['desvío']), 'series_test': int(len(test)),
                'intercepto': f['intercepto'], 'piso_test': float(piso_test),
                'errores_sorpresa': float(sorpresa_err),
+               'siempre_b': {'cv': float(acc_tonto['B', 'Validación cruzada']), 'test': float(acc_tonto['B', 'Prueba'])},
+               'matriz_test': {'vp': vp, 'fn': fn, 'fp': fp, 'vn': vn},
                'apuesta': {k: v for k, v in ra.items() if k not in ('por_tier', 'por_bo', 'mejor_dia', 'peor_dia')},
                'modelos_validacion': {f: {'variante': comp.loc[f, 'variante'], 'accuracy': float(comp.loc[f, 'accuracy']),
                                           'desvio': float(comp.loc[f, 'desvío']), 'accuracy_train': float(comp.loc[f, 'accuracy train'])}
@@ -939,6 +1000,12 @@ def main():
         extraccion=EXTRACCION, publicada=PUBLICADA,
         acc_val_oof=pct(acc_val_oof), n_ex=num(len(ex)), piso_test_num=float(piso_test),
         **textos_apuesta(ra, ap_desde, ap_hasta, rc),
+        b_cv=pct(acc_tonto['B', 'Validación cruzada']), b_test=pct(acc_tonto['B', 'Prueba']),
+        a_test_n=num(int((y_test == 1).sum())), b_test_n=num(int((y_test == 0).sum())),
+        mas_que_piso=num(round(100 * (acc_test - piso_test))),
+        vp=num(vp), fn=num(fn), fp=num(fp), vn=num(vn),
+        rec_a=pct(vp / (vp + fn)), rec_b=pct(vn / (vn + fp)), prec_a=pct(vp / (vp + fp)), prec_b=pct(vn / (vn + fn)),
+        **textos_calibracion(tc), **textos_juego(df),
     )
     html = pagina(ctx, specs, rangos, equipos, cruces, tabla_pasos, tabla_comp, tabla_grillas, tabla_ajuste,
                   tabla_tipos, tabla_coefs, tabla_folds_html, alta, detalle)
