@@ -227,7 +227,7 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
     <p>Con lo que se sabe antes de empezar, el modelo elige al ganador del [[acc_test]] de las series que nunca vio,
     y cuando se equivoca, [[sorpresa_err_n]] de cada 10 veces es porque ganó el equipo que llegaba con menos Elo.</p></div>
   <div class="nums">
-    <div class="num"><span class="tag">Acierto en el test</span><span>[[acc_test]]</span><p>de las [[n_test]] series que el modelo nunca vio, contra [[piso_test]] del piso que dice siempre «gana A»</p></div>
+    <div class="num"><span class="tag">Acierto en el test</span><span>[[acc_test]]</span><p>de las [[n_test]] series que el modelo nunca vio, contra [[piso_test]] de un modelo que dice siempre «gana A» y [[b_test]] de uno que dice siempre «gana B»</p></div>
     <div class="num"><span class="tag">Cuando está seguro</span><span>[[conf80]]</span><p>de aciertos cuando le da 80 % o más a un equipo ([[n80]] series)</p></div>
     <div class="num"><span class="tag">Errores que son sorpresas</span><span>[[sorpresa_err]]</span><p>de los errores en series con Elo distinto: ganó el que llegaba con menos Elo</p></div>
   </div>
@@ -402,8 +402,32 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <p class="mirar"><b>Qué mirar</b> Los cuatro puntos están casi encimados, y todos lejos del piso. Más complejidad no compró aciertos:
   el random forest acierta [[rf_train]] en el entrenamiento y [[rf_acc]] en validación, porque memoriza series que no se repiten.
   Con el empate, nos quedamos con el más simple.</p>
+  <h3 class="sub">¿Acertar el [[acc_test]] es mucho? Contra los modelos que no piensan, sí</h3>
+  <p>Para saber si un modelo sirve, se lo compara con uno «tonto» (en inglés, <i>dummy</i>) que contesta siempre lo mismo sin mirar ningún dato.
+  Probamos los dos posibles: uno que dice siempre «gana A» y otro que dice siempre «gana B». Como A gana un poco más seguido (ver «El juego»),
+  el primero acierta [[piso_test]] en la prueba y el segundo [[b_test]]; tirar una moneda daría 50 %.</p>
+  <div class="grafico" id="g-tontos"></div>
+  <p class="mirar"><b>Qué mirar</b> El modelo acierta [[mas_que_piso]] series más de cada 100 que el mejor de los tontos, y en validación la ventaja era parecida, así que no es suerte del período de prueba.
+  Y lo hace sabiendo muy poco: no sabe qué mapas se van a jugar (cada equipo elige y descarta mapas justo antes de empezar), ni si un jugador está enfermo,
+  ni si hubo un cambio de último momento, ni cómo se juega cada ronda. Con solo lo que se sabe antes, acertar 2 de cada 3 series es un buen resultado.</p>
+  <h3 class="sub">Dónde acierta y dónde se equivoca: la matriz de confusión</h3>
+  <p>La matriz de confusión cruza lo que dijo el modelo (columnas) con lo que pasó (filas), en las [[n_test]] series de prueba. Las casillas
+  <span style="color:var(--ok)">verdes</span> son aciertos y las <span style="color:var(--err)">rojas</span>, errores. Tomando «gana A» como el caso positivo:</p>
+  <ul>
+    <li><b>Verdadero positivo</b> ([[vp]]): dijo «gana A» y ganó A. <b>Verdadero negativo</b> ([[vn]]): dijo «gana B» y ganó B.</li>
+    <li><b>Falso positivo</b> ([[fp]]): dijo «gana A» y ganó B. <b>Falso negativo</b> ([[fn]]): dijo «gana B» y ganó A.</li>
+  </ul>
+  <div class="grafico" id="g-matriz"></div>
+  <p class="mirar"><b>Qué mirar</b> Los modelos tontos aciertan todas las series de un equipo y fallan todas las del otro: una columna llena y otra vacía.
+  El nuestro reparte: de las [[a_test_n]] series que ganó A reconoce el [[rec_a]], y de las [[b_test_n]] que ganó B, el [[rec_b]]. Los dos tipos de error
+  pesan parecido, y para nosotros cuestan lo mismo (equivocarse a favor de A o de B es igual de malo). Cuando dice «gana A» acierta el [[prec_a]]; cuando dice «gana B», el [[prec_b]].</p>
   <h3 class="sub">[[t_confianza]]</h3>
   <div class="grafico" id="g-confianza"></div>
+  <p>El modelo no solo dice quién gana: dice con qué probabilidad. Este gráfico junta las series de prueba según esa probabilidad
+  (la que le dio a su favorito) y mide cuántas acertó. Si las probabilidades dicen la verdad, decimos que el modelo está <b>calibrado</b>:
+  es como el pronóstico del tiempo, que está bien calibrado si de todos los días en que anunció «70 % de lluvia», llovió más o menos 7 de cada 10.</p>
+  <p>En el tramo [[cal_tramo]] hay [[cal_n]] series: el modelo les dio en promedio [[cal_dijo]] y acertó el [[cal_paso]]. En ningún tramo la diferencia
+  entre lo que dijo y lo que pasó supera [[cal_max]] puntos. Esto importa para apostar: si el modelo dice 70 %, se puede leer como un 70 % de verdad y compararlo con la cuota.</p>
   <p class="mirar"><b>Qué mirar</b> Las barras suben con la confianza, y la rayita blanca —lo que el modelo dijo— queda pegada al borde de cada barra —lo que pasó—.
   El modelo <b style="font-family:inherit;text-transform:none;letter-spacing:0;font-size:inherit;color:#fff">sabe cuándo duda</b>: si dice 55 %, es casi una moneda; si dice 80 %, acierta [[conf80]].
   La cuota de cada barra es la mínima para que apostarle al favorito no pierda plata: la usamos en el Pick'em.</p>
@@ -416,7 +440,8 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
     equivocarse a favor de A o de B cuesta lo mismo, y se lee directo. De control miramos el f1 macro y el recall de cada clase,
     para que el modelo no se olvide de B.</p>
     <h4>El piso</h4>
-    <p><code>DummyClassifier(strategy="most_frequent")</code>: dice siempre «gana A». Acierta [[piso_cv]] en validación y [[piso_test]] en el test.</p>
+    <p><code>DummyClassifier(strategy="most_frequent")</code>: dice siempre «gana A», la clase más frecuente del entrenamiento. Acierta [[piso_cv]] en validación y [[piso_test]] en el test.
+    Su espejo, <code>DummyClassifier(strategy="constant", constant=0)</code>, dice siempre «gana B»: [[b_cv]] en validación y [[b_test]] en el test. El piso es el mejor de los dos.</p>
     <h4>Cómo se armó la validación</h4>
     <p>Test: las [[n_test]] series desde el 01/03/2026, apartadas antes de mirar nada. Entrenamiento: las [[n_train]] que empezaron y terminaron antes.
     Adentro del entrenamiento, 5 folds con <code>TimeSeriesSplit</code> sobre los días del calendario: cada fold entrena con todo lo anterior

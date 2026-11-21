@@ -252,3 +252,72 @@ def g_confianza(detalle):
         subtitle=[f'Las {num(len(detalle))} series del test, agrupadas por la probabilidad que el modelo le dio a su favorito.',
                   'La rayita blanca es esa probabilidad media: casi toca el borde de cada barra, así que cuando dice 70 % acierta 7 de 10.',
                   'Adentro de cada barra, la cuota mínima a la que apostar siempre al favorito deja de perder plata.']))
+
+
+# ---------------------------------------------------------------------------
+# Contra los modelos que no piensan, y la matriz de confusión
+# ---------------------------------------------------------------------------
+NOMBRE_TONTO = {'B': 'Siempre «gana B»', 'A': 'Siempre «gana A»', 'modelo': 'Nuestro modelo'}
+
+
+def g_tontos(t):
+    """t: columnas modelo, periodo ('Validación cruzada' | 'Prueba'), accuracy."""
+    orden = [NOMBRE_TONTO[k] for k in ['B', 'A', 'modelo']]
+    periodos = ['Validación cruzada', 'Prueba']
+    esc = alt.Scale(domain=periodos, range=['#8b96a5', ACENTO])
+    y = alt.Y('nombre:N', sort=orden, title=None, axis=alt.Axis(labelLimit=200, labelFontSize=13))
+    base = alt.Chart(t).transform_calculate(texto="replace(format(datum.accuracy * 100, '.1f'), '.', ',') + ' %'")
+    barras = base.mark_bar(cornerRadiusEnd=3, height=14).encode(
+        x=alt.X('accuracy:Q', title='Series acertadas de cada 100', scale=alt.Scale(domain=[0, 1]),
+                axis=alt.Axis(format='.0%', values=[0, 0.25, 0.5, 0.75, 1])),
+        y=y, yOffset=alt.YOffset('periodo:N', sort=periodos, scale=alt.Scale(domain=periodos)),
+        color=alt.Color('periodo:N', scale=esc, sort=periodos, title=None, legend=alt.Legend(orient='bottom')),
+        tooltip=[alt.Tooltip('nombre:N', title='Modelo'), alt.Tooltip('periodo:N', title='Medido en'),
+                 alt.Tooltip('accuracy:Q', title='Acierta', format='.1%')])
+    texto = base.mark_text(align='left', dx=6, fontSize=12, color=TINTA).encode(
+        x='accuracy:Q', y=y, yOffset=alt.YOffset('periodo:N', sort=periodos, scale=alt.Scale(domain=periodos)), text='texto:N')
+    moneda = alt.Chart(pd.DataFrame({'x': [0.5], 't': ['tirar una moneda: 50 %']}))
+    regla = moneda.mark_rule(color=GRIS, strokeDash=[4, 3]).encode(x='x:Q')
+    rot = moneda.mark_text(align='left', dx=5, y=-8, color=GRIS, fontSize=11).encode(x='x:Q', text='t:N')
+    m = t[(t.modelo == 'modelo') & (t.periodo == 'Prueba')].accuracy.iloc[0]
+    a = t[(t.modelo == 'A') & (t.periodo == 'Prueba')].accuracy.iloc[0]
+    return alt.layer(barras, texto, regla, rot).properties(width=600, height=alt.Step(46), title=alt.Title(
+        f'El modelo acierta {round(100 * (m - a))} series más de cada 100 que el mejor de los modelos que no piensan',
+        subtitle=['Un modelo «tonto» (dummy) da siempre la misma respuesta, sin mirar ningún dato. Es la vara mínima:',
+                  'un modelo que no le gana a eso no sirve.']))
+
+
+def tabla_matriz(real, pred):
+    filas = []
+    for r, nr in [(1, 'Ganó A'), (0, 'Ganó B')]:
+        tot = int((real == r).sum())
+        for p_, npred in [(1, 'Dijo «gana A»'), (0, 'Dijo «gana B»')]:
+            n = int(((real == r) & (pred == p_)).sum())
+            acierto = r == p_
+            nombre = {(1, 1): 'Verdadero positivo', (1, 0): 'Falso negativo',
+                      (0, 1): 'Falso positivo', (0, 0): 'Verdadero negativo'}[(r, p_)]
+            filas.append({'real': nr, 'pred': npred, 'n': n, 'fila': n / tot if tot else 0, 'ok': 'Acierto' if acierto else 'Error',
+                          'nombre': nombre, 't_n': num(n), 't_p': f'{pct(n / tot if tot else 0, 0)} de las que {nr.lower()}'})
+    return pd.DataFrame(filas)
+
+
+def g_matriz(tablas):
+    """tablas: lista de (título, DataFrame de tabla_matriz). Una matriz por modelo, lado a lado."""
+    reales, preds = ['Ganó A', 'Ganó B'], ['Dijo «gana A»', 'Dijo «gana B»']
+    paneles = []
+    for i, (titulo, t) in enumerate(tablas):
+        base = alt.Chart(t)
+        x = alt.X('pred:N', sort=preds, title='Lo que dijo el modelo' if i == 1 else None,
+                  axis=alt.Axis(orient='top', labelAngle=0, labelFontSize=12))
+        y = alt.Y('real:N', sort=reales, title='Lo que pasó' if i == 0 else None,
+                  axis=alt.Axis(labels=i == 0, ticks=False, labelFontSize=12))
+        celda = base.mark_rect(stroke=FONDO, strokeWidth=3).encode(
+            x=x, y=y, color=alt.Color('ok:N', scale=ESC_RESULTADO, legend=None),
+            opacity=alt.Opacity('fila:Q', scale=alt.Scale(domain=[0, 1], range=[0.15, 0.95]), legend=None),
+            tooltip=[alt.Tooltip('nombre:N', title='Casilla'), alt.Tooltip('real:N', title='Lo que pasó'),
+                     alt.Tooltip('pred:N', title='Lo que dijo'), alt.Tooltip('n:Q', title='Series', format=','),
+                     alt.Tooltip('t_p:N', title='Proporción')])
+        n = base.mark_text(fontSize=19, fontWeight='bold', dy=-9, color=TINTA, font=FUENTE_HUD).encode(x=x, y=y, text='t_n:N')
+        nom = base.mark_text(fontSize=10.5, dy=11, color=TINTA).encode(x=x, y=y, text='nombre:N')
+        paneles.append(alt.layer(celda, n, nom).properties(width=230, height=170, title=alt.Title(titulo, fontSize=14, anchor='middle')))
+    return alt.hconcat(*paneles, spacing=18).resolve_scale(color='shared', opacity='shared')
