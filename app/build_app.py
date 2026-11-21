@@ -488,22 +488,36 @@ APUESTA = 100   # pesos por serie
 
 
 def ruta_cuotas():
-    hay = sorted((cm.RAIZ_REPO / 'datos').glob('cuotas_bo3_*.csv'))
+    hay = sorted((cm.RAIZ_REPO / 'datos').glob('cuotas_oddspapi_pinnacle_*.csv'))
+    if not hay:
+        hay = sorted((cm.RAIZ_REPO / 'datos').glob('cuotas_bo3_*.csv'))
     return hay[-1] if hay else None
 
 
 def backtest(detalle, test, cuotas, dias=30):
-    """Una fila por serie del último mes: a quién apostaba el modelo, qué cuota pagaba la casa y cuánto dejaba."""
+    """Una fila por serie del período: a quién apostaba el modelo, qué cuota pagaba la casa y cuánto dejaba."""
     d = detalle.assign(match_slug=test.match_slug.values)
     hasta = d.start_at_utc.max()
-    desde = (hasta - pd.Timedelta(days=dias)).normalize()
-    mes = d[d.start_at_utc >= desde].copy()
-    c = cuotas.drop(columns=['tier', 'bo_type']).rename(columns={'estado': 'estado_bo3'})
-    mes = mes.merge(c, on='match_slug', how='left', validate='one_to_one')
-    assert len(mes) == mes.match_slug.nunique()
-    es1 = mes.cuota1_team_id == mes.team_a_id
-    mes['cuota_a'] = np.where(es1, mes.cuota1, mes.cuota2)
-    mes['cuota_b'] = np.where(es1, mes.cuota2, mes.cuota1)
+    es_pinnacle = 'cuota_a' in cuotas.columns and 'cuota_b' in cuotas.columns
+
+    if es_pinnacle:
+        desde = pd.Timestamp('2026-08-15', tz='UTC')
+        mes = d[(d.start_at_utc >= desde) & (d.tier.isin(['s', 'a']))].copy()
+        cols_c = ['match_slug', 'cuota_a', 'cuota_b'] + [
+            col for col in ('margen_casa', 'cuota_a_preveto') if col in cuotas.columns
+        ]
+        mes = mes.merge(cuotas[cols_c], on='match_slug', how='left', validate='one_to_one')
+        assert len(mes) == mes.match_slug.nunique()
+    else:
+        desde = (hasta - pd.Timedelta(days=dias)).normalize()
+        mes = d[d.start_at_utc >= desde].copy()
+        c = cuotas.drop(columns=['tier', 'bo_type']).rename(columns={'estado': 'estado_bo3'})
+        mes = mes.merge(c, on='match_slug', how='left', validate='one_to_one')
+        assert len(mes) == mes.match_slug.nunique()
+        es1 = mes.cuota1_team_id == mes.team_a_id
+        mes['cuota_a'] = np.where(es1, mes.cuota1, mes.cuota2)
+        mes['cuota_b'] = np.where(es1, mes.cuota2, mes.cuota1)
+
     mes['con_cuota'] = mes.cuota_a.notna() & mes.cuota_b.notna()
     elige_a = mes.predicho == 1
     mes['pick'] = np.where(elige_a, mes.team_a_name, mes.team_b_name)
@@ -524,6 +538,8 @@ def resumen_apuesta(b):
     neto_fav = np.where(np.where(fav_casa_a, a.real == 1, a.real == 0), APUESTA * (cuota_fav - 1), -APUESTA)[distintas].sum()
     por_dia = a.groupby(a.start_at_utc.dt.date).resultado.sum()
     v = a[a.valor]
+    margen_med = float(a.margen_casa.median()) if 'margen_casa' in a.columns else float(((1 / a.cuota_a) + (1 / a.cuota_b) - 1).median())
+    pct_preveto = float(a.cuota_a_preveto.notna().mean()) if 'cuota_a_preveto' in a.columns else 0.0
     return {'n_mes': len(b), 'n_cuota': len(a), 'n_sin': int((~b.con_cuota).sum()),
             'apostado': APUESTA * len(a), 'neto': float(a.resultado.sum()),
             'cobrado': float((APUESTA * a.cuota_pick).where(a.acierto, 0).sum()),
@@ -532,10 +548,12 @@ def resumen_apuesta(b):
             'mediana_acierta': float(a.cuota_pick[a.acierto].median()),
             'mediana_falla': float(a.cuota_pick[~a.acierto].median()),
             'pct_extrema': float((np.minimum(a.cuota_a, a.cuota_b) <= 1.06).mean()),
+            'margen_med': margen_med, 'pct_preveto': pct_preveto,
             'fav_casa_gana': float(gana_fav.mean()), 'neto_fav_casa': float(neto_fav), 'n_fav_casa': int(distintas.sum()),
             'dias': len(por_dia), 'dias_positivos': int((por_dia > 0).sum()),
             'mejor_dia': (por_dia.idxmax(), float(por_dia.max())), 'peor_dia': (por_dia.idxmin(), float(por_dia.min())),
-            'n_valor': len(v), 'neto_valor': float(v.resultado.sum()), 'acierto_valor': float(v.acierto.mean()),
+            'n_valor': len(v), 'neto_valor': float(v.resultado.sum()),
+            'acierto_valor': float(v.acierto.mean()) if len(v) else 0.0,
             'por_tier': a.groupby('tier').agg(n=('resultado', 'size'), neto=('resultado', 'sum'), acierto=('acierto', 'mean')),
             'por_bo': a.groupby('bo_type').agg(n=('resultado', 'size'), neto=('resultado', 'sum'), acierto=('acierto', 'mean'))}
 
@@ -545,25 +563,263 @@ def plata(x, signo=False):
     return (('+' if x >= 0 else '−') if signo else ('−' if x < 0 else '')) + '$' + s
 
 
+def _tabla_html(encabezados, filas, resaltar_idx=None):
+    th = ''.join(f'<th>{h}</th>' for h in encabezados)
+    trs = []
+    for i, fila in enumerate(filas):
+        st = ' style="background:rgba(61,220,151,.12);font-weight:600"' if i == resaltar_idx else ''
+        tds = ''.join(f'<td>{c}</td>' for c in fila)
+        trs.append(f'<tr{st}>{tds}</tr>')
+    return f'<div class="tabla"><table><thead><tr>{th}</tr></thead><tbody>{"".join(trs)}</tbody></table></div>'
+
+
+def _analisis_calibracion_umbrales(ruta_cuotas_csv):
+    """Calcula dinámicamente la calibración OOF (29.705 series), la curva de umbrales
+    y la comparativa sobre cuotas pre-partido de Pinnacle (sin tocar el modelo final de E3).
+    """
+    from sklearn.base import clone
+    from sklearn.isotonic import IsotonicRegression
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
+
+    def ece_score(y_true, y_prob, n_bins=10):
+        yt, yp = np.asarray(y_true), np.asarray(y_prob)
+        bins = np.linspace(0.0, 1.0, n_bins + 1)
+        ece = 0.0
+        for i in range(n_bins):
+            m = (yp >= bins[i]) & (yp <= bins[i + 1] if i == n_bins - 1 else yp < bins[i + 1])
+            if m.any():
+                ece += (m.sum() / len(yt)) * abs(yt[m].mean() - yp[m].mean())
+        return float(ece)
+
+    def logit(p):
+        p = np.clip(np.asarray(p, dtype=float), 1e-6, 1.0 - 1e-6)
+        return np.log(p / (1.0 - p))
+
+    def simular(df_pin, col_p, tau=0.50, delta_ev=-9.0, kelly_frac=None, banca_ini=10000.0, tope=0.05):
+        banca, apostado, neto, n_ap, ok = banca_ini, 0.0, 0.0, 0, 0
+        cuotas_usadas = []
+        for r in df_pin.sort_values('start_at_utc').itertuples(index=False):
+            pa = getattr(r, col_p)
+            if pa >= 0.5:
+                p_pick, c_pick, gano = pa, r.cuota_a, (r.target_team_a_won == 1)
+            else:
+                p_pick, c_pick, gano = 1.0 - pa, r.cuota_b, (r.target_team_a_won == 0)
+            ev = p_pick * c_pick - 1.0
+            if p_pick < tau or ev < delta_ev:
+                continue
+            if kelly_frac is not None:
+                if ev <= 0 or c_pick <= 1.0:
+                    continue
+                stake = banca * min(max(0.0, kelly_frac * (ev / (c_pick - 1.0))), tope)
+                if stake < 1.0:
+                    continue
+            else:
+                stake = float(APUESTA)
+            res = stake * (c_pick - 1.0) if gano else -stake
+            banca += res
+            apostado += stake
+            neto += res
+            n_ap += 1
+            ok += int(gano)
+            cuotas_usadas.append(c_pick)
+        return {
+            'n': n_ap,
+            'cob': n_ap / len(df_pin) if len(df_pin) else 0.0,
+            'acc': ok / n_ap if n_ap else 0.0,
+            'cuota_med': float(np.median(cuotas_usadas)) if cuotas_usadas else np.nan,
+            'neto': neto,
+            'roi': neto / apostado if apostado > 0 else 0.0,
+        }
+
+    df = cm.cargar(verificar_huella=False)
+    train, test, _ = cm.separar(df)
+    cv, _ = cm.construir_cv_temporal(train)
+    X_tr, y_tr = train[cm.COLUMNAS_FINAL], train.target_team_a_won
+    X_te = test[cm.COLUMNAS_FINAL]
+
+    pipe_bal = cm.armar(LogisticRegression(max_iter=5000, random_state=cm.SEMILLA, C=0.01, class_weight='balanced'),
+                        cm.COLUMNAS_FINAL)
+    pipe_none = cm.armar(LogisticRegression(max_iter=5000, random_state=cm.SEMILLA, C=0.01, class_weight=None),
+                         cm.COLUMNAS_FINAL)
+
+    oof = {k: pd.Series(np.nan, index=X_tr.index) for k in ('bal', 'none', 'platt', 'iso')}
+    fold_s = pd.Series(0, index=X_tr.index)
+    for k, (e, v) in enumerate(cv, 1):
+        fold_s.iloc[v] = k
+        oof['bal'].iloc[v] = clone(pipe_bal).fit(X_tr.iloc[e], y_tr.iloc[e]).predict_proba(X_tr.iloc[v])[:, 1]
+        oof['none'].iloc[v] = clone(pipe_none).fit(X_tr.iloc[e], y_tr.iloc[e]).predict_proba(X_tr.iloc[v])[:, 1]
+        corte = int(len(e) * 0.80)
+        m_sub = clone(pipe_bal).fit(X_tr.iloc[e[:corte]], y_tr.iloc[e[:corte]])
+        p_cal = m_sub.predict_proba(X_tr.iloc[e[corte:]])[:, 1]
+        p_val_sub = m_sub.predict_proba(X_tr.iloc[v])[:, 1]
+        platt = LogisticRegression(C=1e6, max_iter=1000).fit(logit(p_cal).reshape(-1, 1), y_tr.iloc[e[corte:]])
+        oof['platt'].iloc[v] = platt.predict_proba(logit(p_val_sub).reshape(-1, 1))[:, 1]
+        iso = IsotonicRegression(out_of_bounds='clip').fit(p_cal, y_tr.iloc[e[corte:]])
+        oof['iso'].iloc[v] = iso.predict(p_val_sub)
+
+    val_m = oof['bal'].notna()
+    y_val = y_tr[val_m]
+    platt_f = LogisticRegression(C=1e6, max_iter=1000).fit(logit(oof['bal'][val_m]).reshape(-1, 1), y_val)
+
+    m_bal_f = clone(pipe_bal).fit(X_tr, y_tr)
+    m_none_f = clone(pipe_none).fit(X_tr, y_tr)
+    p_te_bal = m_bal_f.predict_proba(X_te)[:, 1]
+    p_te_none = m_none_f.predict_proba(X_te)[:, 1]
+
+    f4 = lambda x: f'{x:.4f}'.replace('.', ',')
+    f2 = lambda x: f'{x:.2f}'.replace('.', ',')
+    froi = lambda x: ('+' if x >= 0 else '−') + pct(abs(x))
+
+    # 1) Tabla de calibración OOF
+    filas_cal = []
+    etiquetas_cal = [
+        ('bal', 'Logística Entrega 3 (balanced)'),
+        ('none', 'Logística calibrada (sin balanceo)'),
+        ('platt', 'Logística Entrega 3 + Platt Scaling'),
+        ('iso', 'Logística Entrega 3 + Isotónica'),
+    ]
+    for k, nom in etiquetas_cal:
+        pv = oof[k][val_m]
+        filas_cal.append([
+            nom,
+            pct(accuracy_score(y_val, pv >= 0.5)),
+            f4(brier_score_loss(y_val, pv)),
+            f4(log_loss(y_val, pv)),
+            pct(ece_score(y_val, pv), 2),
+            pct(pv.mean()),
+        ])
+    tabla_cal = _tabla_html(
+        ['Variante (validación temporal, 29.705 series)', 'Accuracy', 'Brier (↓)', 'Log-Loss (↓)', 'Error calib. ECE (↓)', 'Prob. media A'],
+        filas_cal, resaltar_idx=1
+    )
+
+    # 2) Tabla de umbral de confianza en validación OOF (usando modelo calibrado)
+    pv_best = oof['none'][val_m].to_numpy()
+    yv_arr = y_val.to_numpy()
+    conf_v = np.maximum(pv_best, 1.0 - pv_best)
+    ok_v = ((pv_best >= 0.5).astype(int) == yv_arr)
+    filas_oof = []
+    for tau in (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80):
+        m = conf_v >= tau
+        acc_m = float(ok_v[m].mean())
+        filas_oof.append([f'≥ {int(tau * 100)} %', num(int(m.sum())), pct(m.mean()), pct(acc_m), f2(1.0 / acc_m)])
+    tabla_oof = _tabla_html(
+        ['Umbral de confianza (τ)', 'Series apostadas', 'Cobertura', 'Acierto en validación', 'Cuota mín. para empatar'],
+        filas_oof, resaltar_idx=3
+    )
+
+    # 3) Comparativa en Pinnacle (153 series Tier S/A)
+    cuotas = pd.read_csv(ruta_cuotas_csv)
+    df_pin = test.assign(p_bal=p_te_bal, p_none=p_te_none).merge(
+        cuotas[['match_slug', 'cuota_a', 'cuota_b']], on='match_slug', how='inner'
+    ).sort_values('start_at_utc').reset_index(drop=True)
+
+    s_bal_50 = simular(df_pin, 'p_bal', tau=0.50)
+    s_none_50 = simular(df_pin, 'p_none', tau=0.50)
+    s_none_60 = simular(df_pin, 'p_none', tau=0.60)
+    s_none_65 = simular(df_pin, 'p_none', tau=0.65)
+    s_none_75 = simular(df_pin, 'p_none', tau=0.75)
+    s_ev0_fijo = simular(df_pin, 'p_none', tau=0.50, delta_ev=0.0)
+    s_ev0_kelly = simular(df_pin, 'p_none', tau=0.50, delta_ev=0.0, kelly_frac=0.25)
+
+    filas_pin = []
+    for nom, s in [
+        ('Entrega 3 (balanced) · siempre ($100)', s_bal_50),
+        ('Calibrado (sin balanceo) · siempre ($100)', s_none_50),
+        ('Calibrado · confianza ≥ 60 % ($100)', s_none_60),
+        ('Calibrado · confianza ≥ 65 % ($100) — mejor punto', s_none_65),
+        ('Calibrado · confianza ≥ 75 % ($100)', s_none_75),
+        ('Calibrado · valor esperado EV ≥ 0 % ($100)', s_ev0_fijo),
+        ('Calibrado · EV ≥ 0 % con Kelly 0,25× (banca $10.000)', s_ev0_kelly),
+    ]:
+        filas_pin.append([
+            nom, num(s['n']), pct(s['cob'], 0), pct(s['acc']), f2(s['cuota_med']),
+            plata(s['neto'], True), froi(s['roi']),
+        ])
+    tabla_pin = _tabla_html(
+        ['Estrategia sobre Pinnacle pre-partido', 'Apuestas', 'Cobertura', 'Acierto', 'Cuota med.', 'Resultado neto', 'ROI'],
+        filas_pin, resaltar_idx=3
+    )
+
+    # 4) Validación temporal interna sobre Pinnacle (Mes 1 vs Mes 2)
+    corte_pin = pd.Timestamp('2026-09-16', tz='UTC')
+    m1, m2 = df_pin[df_pin.start_at_utc < corte_pin], df_pin[df_pin.start_at_utc >= corte_pin]
+    filas_split = []
+    s_m1_65 = simular(m1, 'p_none', tau=0.65)
+    s_m2_65 = simular(m2, 'p_none', tau=0.65)
+    s_m2_50 = simular(m2, 'p_none', tau=0.50)
+    for nom, col, tau, dev, kf in [
+        ('Calibrado · siempre ($100)', 'p_none', 0.50, -9.0, None),
+        ('Calibrado · confianza ≥ 60 % ($100)', 'p_none', 0.60, -9.0, None),
+        ('Calibrado · confianza ≥ 65 % ($100)', 'p_none', 0.65, -9.0, None),
+        ('Calibrado · valor esperado EV ≥ 0 % ($100)', 'p_none', 0.50, 0.0, None),
+        ('Calibrado · EV ≥ 0 % con Kelly 0,25×', 'p_none', 0.50, 0.0, 0.25),
+    ]:
+        r1 = simular(m1, col, tau=tau, delta_ev=dev, kelly_frac=kf)
+        r2 = simular(m2, col, tau=tau, delta_ev=dev, kelly_frac=kf)
+        filas_split.append([
+            nom, f"{num(r1['n'])} ({pct(r1['acc'])})", froi(r1['roi']),
+            f"{num(r2['n'])} ({pct(r2['acc'])})", froi(r2['roi']),
+        ])
+    tabla_split = _tabla_html(
+        ['Estrategia', f'Mes 1: 15/08–15/09 ({len(m1)} series)', 'ROI Mes 1',
+         f'Mes 2: 16/09–15/10 ({len(m2)} series)', 'ROI Mes 2'],
+        filas_split, resaltar_idx=2
+    )
+
+    return dict(
+        ap_cal_ece_bal=pct(ece_score(y_val, oof['bal'][val_m]), 2),
+        ap_cal_ece_none=pct(ece_score(y_val, oof['none'][val_m]), 2),
+        ap_cal_media_bal=pct(oof['bal'][val_m].mean()),
+        ap_cal_media_real=pct(y_val.mean()),
+        ap_platt_a=f"{platt_f.coef_[0][0]:.3f}".replace('.', ','),
+        ap_platt_b=f"{platt_f.intercept_[0]:+.3f}".replace('.', ','),
+        ap_cal_tabla=tabla_cal,
+        ap_oof_tabla=tabla_oof,
+        ap_pin_tabla=tabla_pin,
+        ap_split_tabla=tabla_split,
+        ap_none_neto=plata(s_none_50['neto'], True),
+        ap_none_roi=froi(s_none_50['roi']),
+        ap_none_acc=pct(s_none_50['acc']),
+        ap_opt_neto=plata(s_none_65['neto'], True),
+        ap_opt_roi=froi(s_none_65['roi']),
+        ap_opt_acc=pct(s_none_65['acc']),
+        ap_opt_n=num(s_none_65['n']),
+        ap_opt_cob=pct(s_none_65['cob'], 0),
+        ap_opt_cuota=f2(s_none_65['cuota_med']),
+        ap_m1_roi=froi(s_m1_65['roi']),
+        ap_m1_acc=pct(s_m1_65['acc']),
+        ap_m2_roi=froi(s_m2_65['roi']),
+        ap_m2_acc=pct(s_m2_65['acc']),
+        ap_m2_siempre_roi=froi(s_m2_50['roi']),
+    )
+
+
 def textos_apuesta(ra, desde, hasta, ruta):
     t = ra['por_tier']
     tiers = '; '.join(f"tier {g.TIER_NOMBRE[k].split(' ')[0]}: {plata(r.neto, True)} en {num(r.n)} apuestas"
                       for k, r in t.loc[[x for x in g.TIERS if x in t.index]].iterrows())
+    extra = _analisis_calibracion_umbrales(ruta) if 'pinnacle' in ruta.name else {}
     return dict(
         ap_desde=f'{desde:%d/%m/%Y}', ap_hasta=f'{hasta:%d/%m/%Y a las %H:%M} UTC', ap_archivo=ruta.name,
         ap_n_mes=num(ra['n_mes']), ap_n_cuota=num(ra['n_cuota']), ap_n_sin=num(ra['n_sin']),
         ap_apostado=plata(ra['apostado']), ap_neto=plata(abs(ra['neto'])), ap_cobrado=plata(ra['cobrado']),
+        ap_neto_sig=plata(ra['neto'], True),
+        ap_roi_sig=('+' if ra['roi'] >= 0 else '−') + pct(abs(ra['roi'])),
         ap_verbo='ganabas' if ra['neto'] >= 0 else 'perdías', ap_veredicto='Sí' if ra['neto'] > 0 else 'No',
+        ap_signo_txt='más' if ra['neto'] >= 0 else 'menos',
         ap_roi=pct(abs(ra['roi'])), ap_acierto=pct(ra['acierto']), ap_equilibrio=f"{ra['equilibrio']:.2f}".replace('.', ','),
         ap_med_ok=f"{ra['mediana_acierta']:.2f}".replace('.', ','), ap_med_err=f"{ra['mediana_falla']:.2f}".replace('.', ','),
-        ap_extrema=pct(ra['pct_extrema'], 0), ap_fav_gana=pct(ra['fav_casa_gana'], 0),
+        ap_extrema=pct(ra['pct_extrema'], 1), ap_margen=pct(ra['margen_med'], 2), ap_preveto=pct(ra['pct_preveto'], 1),
+        ap_fav_gana=pct(ra['fav_casa_gana'], 0),
         ap_neto_fav=plata(ra['neto_fav_casa'], True), ap_n_fav=num(ra['n_fav_casa']),
         ap_roi_fav=('+' if ra['neto_fav_casa'] >= 0 else '−') + pct(abs(ra['neto_fav_casa']) / (APUESTA * ra['n_fav_casa'])),
         ap_dias=num(ra['dias']), ap_dias_pos=num(ra['dias_positivos']),
         ap_peor_dia=f"{ra['peor_dia'][0]:%d/%m}", ap_peor_dia_neto=plata(ra['peor_dia'][1], True),
         ap_mejor_dia=f"{ra['mejor_dia'][0]:%d/%m}", ap_mejor_dia_neto=plata(ra['mejor_dia'][1], True),
         ap_n_valor=num(ra['n_valor']), ap_neto_valor=plata(ra['neto_valor'], True), ap_acierto_valor=pct(ra['acierto_valor'], 0),
-        ap_tiers=tiers)
+        ap_tiers=tiers, **extra)
 
 
 def datos_apuesta(b):
@@ -579,33 +835,41 @@ def datos_apuesta(b):
         'ganador': a.ganador, 'mapas': a.apply(mapas, axis=1)})
 
 
-def g_apuesta(ap):
+def g_apuesta(ap, elemento='#c-apuesta', conf_ini=50, sufijo=''):
     csv = ap.to_csv(index=False)
     datos = alt.InlineData(values=csv, format=alt.DataFormat(type='csv', parse={
         'id': 'number', 'conf': 'number', 'cuota': 'number', 'cuota_r': 'number', 'ok': 'number', 'res': 'number',
         'valor': 'number', 't': 'date'}))
-    E = '#c-apuesta'
-    tier_ap = alt.param(name='tier_ap', value='Todos', bind=alt.binding_select(
+    E = elemento
+    p_tier = f'tier_ap{sufijo}'
+    p_bo = f'bo_ap{sufijo}'
+    p_est = f'estrategia{sufijo}'
+    p_eq = f'equipo_ap{sufijo}'
+    p_conf = f'conf_ap{sufijo}'
+    p_dia = f'dia{sufijo}'
+
+    tier_ap = alt.param(name=p_tier, value='Todos', bind=alt.binding_select(
         options=['Todos'] + g.TIER_ORDEN[:4], name='Tier ', element=E))
-    bo_ap = alt.param(name='bo_ap', value='Todos', bind=alt.binding_select(
+    bo_ap = alt.param(name=p_bo, value='Todos', bind=alt.binding_select(
         options=['Todos', 'BO1', 'BO3', 'BO5'], name='Formato ', element=E))
-    estrategia = alt.param(name='estrategia', value='Siempre', bind=alt.binding_radio(
+    estrategia = alt.param(name=p_est, value='Siempre', bind=alt.binding_radio(
         options=['Siempre', 'Sólo con valor'], labels=['Siempre al pronóstico', 'Sólo si la cuota tiene valor'],
         name='Cuándo apostar ', element=E))
-    equipo_ap = alt.param(name='equipo_ap', value='', bind=alt.binding(
+    equipo_ap = alt.param(name=p_eq, value='', bind=alt.binding(
         input='search', name='Equipo ', placeholder='p. ej. Vitality', element=E))
-    conf_ap = alt.param(name='conf_ap', value=50, bind=alt.binding_range(
+    conf_ap = alt.param(name=p_conf, value=conf_ini, bind=alt.binding_range(
         min=50, max=95, step=5, name='Confianza mínima del modelo (%) ', element=E))
-    dia = alt.selection_point(name='dia', fields=['dia'], on='click', clear='dblclick', empty=True)
+    dia = alt.selection_point(name=p_dia, fields=['dia'], on='click', clear='dblclick', empty=True)
 
-    f_tier = "(tier_ap == 'Todos' || datum.tier == tier_ap)"
-    f_bo = "(bo_ap == 'Todos' || datum.bo == bo_ap)"
-    f_resto = ("(estrategia == 'Siempre' || datum.valor == 1)"
-               " && (equipo_ap == '' || indexof(lower(datum.a + ' ' + datum.b), lower(equipo_ap)) >= 0)"
-               " && datum.conf * 100 >= conf_ap")
+    f_tier = f"({p_tier} == 'Todos' || datum.tier == {p_tier})"
+    f_bo = f"({p_bo} == 'Todos' || datum.bo == {p_bo})"
+    f_resto = (f"({p_est} == 'Siempre' || datum.valor == 1)"
+               f" && ({p_eq} == '' || indexof(lower(datum.a + ' ' + datum.b), lower({p_eq})) >= 0)"
+               f" && datum.conf * 100 >= {p_conf}")
     base = alt.Chart(datos).transform_calculate(
         sin_dia=f'{f_tier} && {f_bo} && {f_resto}', sin_tier=f'{f_bo} && {f_resto}', sin_bo=f'{f_tier} && {f_resto}')
-    base = base.transform_calculate(en_filtro="datum.sin_dia && (!length(data('dia_store')) || vlSelectionTest('dia_store', datum))")
+    base = base.transform_calculate(
+        en_filtro=f"datum.sin_dia && (!length(data('{p_dia}_store')) || vlSelectionTest('{p_dia}_store', datum))")
 
     # ---- conclusión que cambia con cada filtro
     agg = base.transform_filter('datum.en_filtro').transform_aggregate(
@@ -735,6 +999,159 @@ LOCALE_TIEMPO = {"dateTime": "%A, %e de %B de %Y, %X", "date": "%d/%m/%Y", "time
                  "shortMonths": ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]}
 
 
+def g_calibracion(df_cal):
+    """Curva de calibración (validación temporal OOF): Entrega 3 (balanced) vs Calibrado (sin balanceo)."""
+    diag = alt.Chart(pd.DataFrame({'x': [0.1, 0.9], 'y': [0.1, 0.9]})).mark_line(
+        strokeDash=[5, 4], color='#9aa5b4', strokeWidth=1.5
+    ).encode(x='x:Q', y='y:Q')
+
+    linea = alt.Chart(df_cal).mark_line(point=alt.OverlayMarkDef(size=55), strokeWidth=2.4).encode(
+        x=alt.X('pred:Q', title='Probabilidad predicha de «gana A»', scale=alt.Scale(domain=[0.1, 0.9]),
+                axis=alt.Axis(format='.0%')),
+        y=alt.Y('real:Q', title='Frecuencia real de «gana A»', scale=alt.Scale(domain=[0.1, 0.9]),
+                axis=alt.Axis(format='.0%')),
+        color=alt.Color('modelo:N', title=None, scale=alt.Scale(
+            domain=['Entrega 3 (balanced)', 'Calibrado (sin balanceo)'],
+            range=['#f0b23e', '#3ddc97']
+        ), legend=alt.Legend(orient='top-left')),
+        tooltip=[
+            alt.Tooltip('modelo:N', title='Modelo'),
+            alt.Tooltip('pred:Q', title='Prob. predicha media', format='.1%'),
+            alt.Tooltip('real:Q', title='Ganó A realmente', format='.1%'),
+            alt.Tooltip('n:Q', title='Series en el tramo', format=',.0f'),
+        ],
+    )
+    return (diag + linea).properties(
+        width=860, height=300,
+        title=alt.Title(
+            'Calibración en validación temporal (29.705 series)',
+            subtitle='Línea punteada: calibración perfecta. Con balanced el modelo subestima a A; sin balanceo queda pegado a la diagonal.',
+            anchor='start', fontSize=14, subtitleColor=g.GRIS,
+        ),
+    )
+
+
+def g_umbrales(df_oof, df_pin):
+    """Panel izquierdo: Acierto vs Cobertura en validación OOF. Panel derecho: ROI en Pinnacle (U invertida)."""
+    base_oof = alt.Chart(df_oof).encode(
+        x=alt.X('tau:O', title='Umbral mínimo de confianza', sort=list(df_oof['tau']))
+    )
+    barras_cob = base_oof.mark_bar(opacity=0.28, color='#5b9cf0', cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+        y=alt.Y('cobertura:Q', title='Acierto / Cobertura', scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format='.0%')),
+        tooltip=[
+            alt.Tooltip('tau:O', title='Umbral'),
+            alt.Tooltip('acierto:Q', title='Acierto (validación)', format='.1%'),
+            alt.Tooltip('cobertura:Q', title='Cobertura', format='.1%'),
+            alt.Tooltip('n:Q', title='Series', format=',.0f'),
+        ],
+    )
+    linea_acc = base_oof.mark_line(point=alt.OverlayMarkDef(size=60, filled=True), color='#3ddc97', strokeWidth=2.5).encode(
+        y=alt.Y('acierto:Q'),
+        tooltip=[
+            alt.Tooltip('tau:O', title='Umbral'),
+            alt.Tooltip('acierto:Q', title='Acierto (validación)', format='.1%'),
+            alt.Tooltip('cobertura:Q', title='Cobertura', format='.1%'),
+        ],
+    )
+    txt_acc = base_oof.mark_text(dy=-10, fontSize=11, color='#e8ecf1', fontWeight='bold').encode(
+        y='acierto:Q', text=alt.Text('acierto:Q', format='.0%')
+    )
+    izq = (barras_cob + linea_acc + txt_acc).properties(
+        width=410, height=270,
+        title=alt.Title('Validación sin cuotas (29.705 series)',
+                        subtitle='Línea verde: acierto · Barras azules: cobertura',
+                        anchor='start', fontSize=13, subtitleColor=g.GRIS),
+    )
+
+    cero = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(color='#9aa5b4', strokeDash=[4, 4]).encode(y='y:Q')
+    barras_roi = alt.Chart(df_pin).mark_bar(cornerRadius=3).encode(
+        x=alt.X('tau:O', title='Umbral mínimo de confianza', sort=list(df_pin['tau'])),
+        y=alt.Y('roi:Q', title='ROI en Pinnacle pre-partido', axis=alt.Axis(format='+.0%')),
+        color=alt.condition('datum.roi >= 0', alt.value(g.COLOR_OK), alt.value(g.COLOR_ERR)),
+        tooltip=[
+            alt.Tooltip('tau:O', title='Umbral'),
+            alt.Tooltip('n:Q', title='Apuestas', format=',.0f'),
+            alt.Tooltip('acierto:Q', title='Acierto', format='.1%'),
+            alt.Tooltip('cuota_med:Q', title='Cuota mediana', format='.2f'),
+            alt.Tooltip('neto:Q', title='Resultado neto ($)', format='+,.0f'),
+            alt.Tooltip('roi:Q', title='ROI', format='+.1%'),
+        ],
+    )
+    txt_roi = alt.Chart(df_pin).mark_text(
+        dy=alt.expr('datum.roi >= 0 ? -9 : 12'), fontSize=11, color='#e8ecf1', fontWeight='bold'
+    ).encode(
+        x=alt.X('tau:O', sort=list(df_pin['tau'])),
+        y='roi:Q',
+        text=alt.Text('roi:Q', format='+.1%'),
+    )
+    der = (barras_roi + cero + txt_roi).properties(
+        width=410, height=270,
+        title=alt.Title('ROI real en Pinnacle (153 series Tier S/A)',
+                        subtitle='Curva en «U invertida»: pico en 65 % (+3,9 % / +$363)',
+                        anchor='start', fontSize=13, subtitleColor=g.GRIS),
+    )
+    return alt.hconcat(izq, der).resolve_scale(y='independent')
+
+
+def datos_graficos_calibrado(train, test, cv, cuotas):
+    """Genera los DataFrames para g-calibracion, g-umbrales y g-apuesta-cal (modelo sin balanceo)."""
+    from sklearn.base import clone
+    from sklearn.linear_model import LogisticRegression
+
+    X_tr, y_tr = train[cm.COLUMNAS_FINAL], train.target_team_a_won
+    X_te = test[cm.COLUMNAS_FINAL]
+    pipe_bal = cm.armar(LogisticRegression(max_iter=5000, random_state=cm.SEMILLA, C=0.01, class_weight='balanced'),
+                        cm.COLUMNAS_FINAL)
+    pipe_none = cm.armar(LogisticRegression(max_iter=5000, random_state=cm.SEMILLA, C=0.01, class_weight=None),
+                         cm.COLUMNAS_FINAL)
+
+    oof_bal = pd.Series(np.nan, index=X_tr.index)
+    oof_none = pd.Series(np.nan, index=X_tr.index)
+    for e, v in cv:
+        oof_bal.iloc[v] = clone(pipe_bal).fit(X_tr.iloc[e], y_tr.iloc[e]).predict_proba(X_tr.iloc[v])[:, 1]
+        oof_none.iloc[v] = clone(pipe_none).fit(X_tr.iloc[e], y_tr.iloc[e]).predict_proba(X_tr.iloc[v])[:, 1]
+
+    val_m = oof_bal.notna()
+    yv = y_tr[val_m].to_numpy()
+
+    # 1) Curva de calibración (10 deciles)
+    filas_cal = []
+    for nom, p_arr in [('Entrega 3 (balanced)', oof_bal[val_m].to_numpy()),
+                       ('Calibrado (sin balanceo)', oof_none[val_m].to_numpy())]:
+        bins = pd.qcut(p_arr, 10, duplicates='drop')
+        tmp = pd.DataFrame({'p': p_arr, 'y': yv, 'b': bins}).groupby('b', observed=True).agg(
+            pred=('p', 'mean'), real=('y', 'mean'), n=('y', 'size')
+        )
+        for r in tmp.itertuples(index=False):
+            filas_cal.append({'modelo': nom, 'pred': r.pred, 'real': r.real, 'n': int(r.n)})
+    df_cal = pd.DataFrame(filas_cal)
+
+    # 2) Curva de umbrales en validación OOF
+    pn = oof_none[val_m].to_numpy()
+    conf_v = np.maximum(pn, 1.0 - pn)
+    ok_v = ((pn >= 0.5).astype(int) == yv)
+    df_oof = pd.DataFrame([
+        {'tau': f'≥ {int(t * 100)} %', 'cobertura': float((conf_v >= t).mean()),
+         'acierto': float(ok_v[conf_v >= t].mean()), 'n': int((conf_v >= t).sum())}
+        for t in (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80)
+    ])
+
+    # 3) Backtest del modelo calibrado sobre Pinnacle (para g-umbrales y g-apuesta-cal)
+    p_te_none = clone(pipe_none).fit(X_tr, y_tr).predict_proba(X_te)[:, 1]
+    det_cal = cm.detalle_predicciones(test, p_te_none)
+    ap_cal, _, _ = backtest(det_cal, test, cuotas)
+    a = ap_cal[ap_cal.con_cuota]
+    filas_pin = []
+    for t in (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80):
+        s = a[a.confianza >= t]
+        neto = float(s.resultado.sum())
+        filas_pin.append({
+            'tau': f'≥ {int(t * 100)} %', 'n': len(s), 'acierto': float(s.acierto.mean()),
+            'cuota_med': float(s.cuota_pick.median()), 'neto': neto,
+            'roi': neto / (APUESTA * len(s)) if len(s) else 0.0,
+        })
+    return df_cal, df_oof, pd.DataFrame(filas_pin), ap_cal
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--cache', action='store_true', help='reusar resultados/busqueda_v4.pkl si existe')
@@ -789,9 +1206,14 @@ def main():
     graficos['g-proba'] = gp
     rc = ruta_cuotas()
     assert rc is not None, 'Faltan las cuotas: python app/bajar_cuotas.py (ver README).'
-    apuesta, ap_desde, ap_hasta = backtest(detalle, test, pd.read_csv(rc))
+    cuotas = pd.read_csv(rc)
+    apuesta, ap_desde, ap_hasta = backtest(detalle, test, cuotas)
     ra = resumen_apuesta(apuesta)
     graficos['g-apuesta'] = g_apuesta(datos_apuesta(apuesta))
+    df_cal, df_oof_u, df_pin_u, ap_cal = datos_graficos_calibrado(train, test, cv, cuotas)
+    graficos['g-calibracion'] = g_calibracion(df_cal)
+    graficos['g-umbrales'] = g_umbrales(df_oof_u, df_pin_u)
+    graficos['g-apuesta-cal'] = g_apuesta(datos_apuesta(ap_cal), elemento='#c-apuesta-cal', conf_ini=65, sufijo='_cal')
     # Sin «$schema»: la página trae Vega-Lite 6 y Vega 6, y así vega-embed compila cada gráfico con
     # esas versiones en lugar de avisar que fue escrito para Vega-Lite 5.
     specs = {k: {c: x for c, x in v.to_dict().items() if c != '$schema'} for k, v in graficos.items()}

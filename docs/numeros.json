@@ -3,30 +3,32 @@
   "accuracy_cv": 0.6315074729024236,
   "desvio_cv": 0.006927094755929868,
   "series_test": 8819,
-  "intercepto": 0.05637011317267061,
+  "intercepto": 0.05637011317265379,
   "piso_test": 0.5450731375439393,
   "errores_sorpresa": 0.8188950637463224,
   "apuesta": {
-    "n_mes": 1210,
-    "n_cuota": 783,
-    "n_sin": 427,
-    "apostado": 78300,
-    "neto": -18879.7,
-    "cobrado": 59420.3,
-    "roi": -0.24112005108556833,
-    "acierto": 0.6462324393358876,
-    "equilibrio": 1.5474308300395256,
-    "mediana_acierta": 1.03,
-    "mediana_falla": 3.535,
-    "pct_extrema": 0.5632183908045977,
-    "fav_casa_gana": 0.8793103448275862,
-    "neto_fav_casa": 445.9,
-    "n_fav_casa": 696,
-    "dias": 31,
-    "dias_positivos": 4,
-    "n_valor": 266,
-    "neto_valor": -15929.3,
-    "acierto_valor": 0.21804511278195488
+    "n_mes": 212,
+    "n_cuota": 153,
+    "n_sin": 59,
+    "apostado": 15300,
+    "neto": -1049.3,
+    "cobrado": 14250.7,
+    "roi": -0.06858169934640522,
+    "acierto": 0.6209150326797386,
+    "equilibrio": 1.6105263157894736,
+    "mediana_acierta": 1.442,
+    "mediana_falla": 1.7269999999999999,
+    "pct_extrema": 0.006535947712418301,
+    "margen_med": 0.0485,
+    "pct_preveto": 0.9934640522875817,
+    "fav_casa_gana": 0.6710526315789473,
+    "neto_fav_casa": -304.50000000000006,
+    "n_fav_casa": 152,
+    "dias": 43,
+    "dias_positivos": 22,
+    "n_valor": 77,
+    "neto_valor": -642.5999999999999,
+    "acierto_valor": 0.5324675324675324
   },
   "modelos_validacion": {
     "regresión logística": {
@@ -54,5 +56,5 @@
       "accuracy_train": 0.6467477313366483
     }
   },
-  "generado": "2026-11-10T02:46:59"
+  "generado": "2026-11-20T21:03:04"
 }

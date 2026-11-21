@@ -411,41 +411,91 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   son el último valor registrado. El cruce directo sale de sus últimos 5 enfrentamientos.</p>
 </section>
 <section id="apuesta" class="copa">
-  <div class="etiqueta"><span class="num">OT 3</span><span class="nombre">La apuesta · un mes con plata de verdad</span></div>
-  <h2>[[ap_veredicto]]: apostando $100 a cada pronóstico del modelo durante un mes, [[ap_verbo]] [[ap_neto]]</h2>
-  <p>Tomamos el último mes del dataset —las series que empezaron entre el <b>[[ap_desde]]</b> y el <b>[[ap_hasta]]</b>, la última que tenemos—,
-  le pedimos a Bo3.gg lo que pagaba la casa de apuestas en cada una y simulamos lo más simple: $100 al equipo que elegía el modelo, siempre.
-  El número violeta que muestra Bo3.gg (por ejemplo, <b>$184</b>) es lo que la casa devuelve por $100: los $100 apostados más $84 de ganancia, una cuota de 1,84.
-  De las [[ap_n_mes]] series del mes, [[ap_n_cuota]] tenían cuota; en las otras [[ap_n_sin]] Bo3.gg no tiene cuota y no se apuesta.</p>
-  <p>Resultado: apostaste [[ap_apostado]], la casa te devolvió [[ap_cobrado]] y te quedaste con <b>[[ap_neto]] menos</b>
-  ([[ap_roi]] de lo apostado). El modelo acertó el [[ap_acierto]] de esas apuestas —parecido al [[acc_test]] de todo el test—, pero acertar no alcanza:
-  cuando acertaba, la cuota mediana era [[ap_med_ok]] (ganabas unos centavos), y cuando fallaba perdías los $100 enteros.
-  Sólo [[ap_dias_pos]] de [[ap_dias]] días terminaron en positivo.</p>
+  <div class="etiqueta"><span class="num">OT 3</span><span class="nombre">La apuesta · cuotas pre-partido, calibración y umbral</span></div>
+  <h2>Con cuotas pre-partido reales, el modelo de la Entrega 3 pierde [[ap_neto]], pero calibrarlo y apostar sólo desde 65 % revierte el resultado a [[ap_opt_neto]]</h2>
+
+  <p>En la versión anterior usamos las cuotas publicadas por Bo3.gg y el resultado era una pérdida de <b>−$18.880 (−24,1 %)</b>.
+  Al auditarlo encontramos un sesgo en los datos de origen: Bo3.gg conserva la <b>última cuota en vivo</b> del partido, no la previa al inicio
+  (en el 56 % de las series un equipo figuraba pagando 1,06 o menos, cuando el partido ya estaba definido).</p>
+
+  <p>Para corregir ese problema y medir una simulación realista, descargamos el historial de cuotas <b>estrictamente previas al inicio</b> de
+  <b>Pinnacle</b> (vía OddsPapi) para los torneos principales (tiers S y A) de los últimos dos meses del test (<b>[[ap_desde]]</b> al <b>[[ap_hasta]]</b>).
+  De las [[ap_n_mes]] series del período, [[ap_n_cuota]] tenían línea pre-partido disponible (sólo el [[ap_extrema]] presenta cuotas ≤ 1,06, el margen mediano de la casa es [[ap_margen]] y el [[ap_preveto]] ya estaba abierto al menos 2 horas antes, previo al veto de mapas).</p>
+
+  <div class="nums">
+    <div class="num" style="border-top-color:var(--err)"><span class="tag">Antes · Bo3.gg en vivo (corregido)</span><span>−24,1 %</span>
+      <p>−$18.880 en 783 series (−33,9 % mirando sólo tiers S y A). El 56 % eran cuotas en vivo ≤ 1,06.</p></div>
+    <div class="num" style="border-top-color:var(--t)"><span class="tag">Entrega 3 (balanced) · Pinnacle</span><span>[[ap_roi_sig]]</span>
+      <p>[[ap_neto_sig]] apostando $100 a las [[ap_n_cuota]] series (acierto [[ap_acierto]]). El margen de la casa supera el acierto general.</p></div>
+    <div class="num" style="border-top-color:var(--ok)"><span class="tag">Calibrado + umbral ≥ 65 % · Pinnacle</span><span>[[ap_opt_roi]]</span>
+      <p>[[ap_opt_neto]] en [[ap_opt_n]] apuestas ([[ap_opt_cob]] de cobertura): el acierto sube a [[ap_opt_acc]] con cuota mediana [[ap_opt_cuota]].</p></div>
+  </div>
+
+  <h3 class="sub">1. Punto de partida: el modelo de la Entrega 3 sobre cuotas pre-partido reales</h3>
+  <p>Primero probamos exactamente el mismo modelo congelado de la Entrega 3 (<code>C = 0,01</code>, <code>class_weight = "balanced"</code>)
+  apostando $100 a cada pronóstico. Resultado: apostaste [[ap_apostado]], la casa devolvió [[ap_cobrado]] y cerraste en <b>[[ap_neto_sig]]</b> ([[ap_roi_sig]]),
+  con un [[ap_acierto]] de aciertos y [[ap_dias_pos]] de [[ap_dias]] días en positivo. Cuando acertaba, Pinnacle pagaba en la mediana [[ap_med_ok]] (hacía falta al menos [[ap_equilibrio]] para empatar).</p>
+
   <div class="controles" id="c-apuesta"></div>
   <div class="grafico" id="g-apuesta"></div>
-  <p class="nota">Probá: elegí un tier o un formato y mirá cómo cambia la cuenta de arriba; hacé clic en un día para ver sólo sus apuestas;
-  buscá a tu equipo. «Sólo si la cuota tiene valor» apuesta únicamente cuando la probabilidad del modelo por la cuota da más de 1, la regla del Pick'em.
-  Por tier, con todas las apuestas: [[ap_tiers]].</p>
-  <details><summary>Cómo lo sabemos <small>de dónde salen las cuotas y por qué la casa gana</small></summary>
-  <p><b>Las cuotas.</b> Bo3.gg arma su página de resultados con una consulta por día a su API
-  (<code>api.bo3.gg/api/v2/matches/finished?date=…</code>); cada serie trae un bloque <code>bet_updates</code> con la cuota decimal de cada equipo en Thunderpick,
-  la casa asociada. Pedimos los días del 14/09 al 16/10 (un día de más a cada lado, porque Bo3.gg agrupa por fecha de inicio)
-  y unimos por el identificador de la serie: las [[ap_n_mes]] series del mes aparecen todas. Las cuotas quedan en <code>datos/[[ap_archivo]]</code>.</p>
-  <p><b>Las predicciones.</b> Son las del test: el modelo final, entrenado sólo con series anteriores al corte, sin volver a entrenar.
-  Cada apuesta es de $100 al equipo con más probabilidad según el modelo; si gana, cobra $100 × cuota; si pierde, pierde los $100.</p>
-  <p><b>Por qué se pierde.</b> Para no perder, con un [[ap_acierto]] de aciertos hace falta que la cuota promedio de lo que se acierta sea al menos
-  [[ap_equilibrio]] (1 dividido el acierto). La que pagaba la casa cuando el modelo acertaba fue, en la mediana, [[ap_med_ok]]; cuando fallaba, [[ap_med_err]].
-  La casa ya sabía quién era el favorito y le pagaba casi nada.</p>
-  <p><b>Una advertencia sobre las cuotas.</b> Bo3.gg guarda la <i>última</i> cuota que publicó la casa, no la de antes del partido. En el [[ap_extrema]]
-  de las series uno de los dos equipos terminó con cuota 1,06 o menos, y en varias los dos quedaron en 1,001 (mercado cerrado): señal de que la casa siguió moviendo la cuota durante la serie, con el marcador a la vista.
-  Por eso el favorito de la casa ganó el [[ap_fav_gana]] de las [[ap_n_fav]] series con favorito, muy por encima del [[acc_test]] de nuestro modelo, que sí predice antes de empezar,
-  y aun así apostar siempre a ese favorito dejaba apenas [[ap_neto_fav]] en [[ap_n_fav]] apuestas ([[ap_roi_fav]] de lo apostado). Estas cuotas castigan al que acierta: lo que medimos es cuánto se habría ganado
-  cobrando lo que Bo3.gg muestra hoy, no lo que se podía conseguir antes de cada serie, que Bo3.gg no conserva.</p>
-  <p><b>La regla del valor.</b> Apostando sólo cuando la probabilidad del modelo por la cuota supera 1 quedan [[ap_n_valor]] apuestas, el modelo acierta el
-  [[ap_acierto_valor]] y el mes cierra en [[ap_neto_valor]]: la cuota «con valor» casi siempre era la de un equipo que la casa ya veía perdiendo.</p>
-  <p><b>Conclusión.</b> Con lo que pagaba la casa, seguir al modelo no da ganancia: acierta 2 de cada 3 series, pero sus aciertos son los mismos que ve
-  la casa, que los paga poco. Para ganarle haría falta acertar donde la casa se equivoca, y ahí el modelo es más débil
-  (las sorpresas: las series que gana el de menos Elo). El mejor día fue el [[ap_mejor_dia]] ([[ap_mejor_dia_neto]]); el peor, el [[ap_peor_dia]] ([[ap_peor_dia_neto]]).</p>
+  <p class="nota">Probá el efecto del umbral en vivo: subí <b>Confianza mínima del modelo (%)</b> a 65 % para ver qué pasa al dejar de apostar en partidos parejos,
+  filtrá por tier ([[ap_tiers]]) o hacé clic en un día para inspeccionar sus apuestas.</p>
+
+  <h3 class="sub">2. Paso clave antes de apostar: calibrar las probabilidades</h3>
+  <p>Un modelo está bien <b>calibrado</b> cuando sus porcentajes reflejan frecuencias reales (si predice 70 %, ese equipo gana cerca del 70 % de las veces).
+  Para clasificar con corte 50 % no molesta, pero <b>para apostar es indispensable</b> porque toda regla de umbral o valor esperado usa esa probabilidad.</p>
+  <p>Al evaluar en los 5 folds temporales de validación (29.705 series, sin mirar el test), vimos que el parámetro <code>class_weight = "balanced"</code>
+  de la Entrega 3 emparejaba el recall entre A y B a costa de correr las probabilidades 2 puntos hacia B (predice [[ap_cal_media_bal]] promedio para A cuando A gana [[ap_cal_media_real]]).
+  Al quitar el balanceo (<code>class_weight = None</code>), <b>el error de calibración (ECE) cae a la mitad</b> (de [[ap_cal_ece_bal]] a [[ap_cal_ece_none]]) y se logra el mejor <i>Log-Loss</i> y <i>Brier Score</i> sin agregar complejidad ni sobreajustar (la regresión isotónica, en cambio, sobreajusta en validación).</p>
+  <div class="grafico" id="g-calibracion"></div>
+  [[ap_cal_tabla]]
+  <p class="mirar"><b>Qué mirar</b> Quitar el balanceo no cambia la accuracy global (~63 %), pero alinea las probabilidades con la realidad.
+  Sólo ese ajuste ya reduce la pérdida en Pinnacle de [[ap_neto_sig]] ([[ap_roi_sig]]) a <b>[[ap_none_neto]] ([[ap_none_roi]])</b> apostando a todas las series.</p>
+
+  <h3 class="sub">3. ¿Cuál es el mejor umbral para apostar? (y por qué no conviene subirlo de más)</h3>
+  <p>Apostar a todos los partidos obliga al modelo a jugar en series parejas (50–55 %), donde acierta casi como una moneda.
+  En la validación temporal de 29.705 series (sin cuotas), <b>abstenerse cuando el modelo duda eleva el acierto de forma constante</b>:
+  de 63,0 % apostando siempre a 72,4 % desde umbral 65 % y 84,6 % desde 80 %.</p>
+  <div class="grafico" id="g-umbrales"></div>
+  <p>Sin embargo, al llevar esos umbrales a las cuotas reales de Pinnacle aparece una <b>curva en «U invertida»</b>:
+  subir el umbral a <b>65 %</b> elimina los partidos dudosos y mejora el resultado hasta <b>[[ap_opt_neto]] ([[ap_opt_roi]])</b> con [[ap_opt_acc]] de acierto,
+  pero exigir <b>75 % o más</b> vuelve a perder plata porque la casa paga cuotas muy bajas (~1,20) y basta una sorpresa para borrar varios aciertos.</p>
+  [[ap_pin_tabla]]
+  <p class="mirar"><b>Hallazgo clave · selección adversa</b> Filtrar por valor esperado puro (<code>EV ≥ 0 %</code>) o usar <b>Kelly fraccionado (0,25×)</b> sin filtro de confianza
+  <i>empeora</i> el resultado. ¿Por qué? Porque cuando un modelo basado sólo en histórico previo ve una «ganga enorme» contra Pinnacle, casi nunca venció a la casa:
+  discrepó con un mercado que sí conoce el <b>veto de mapas</b>, bajas o estado del día. Como Kelly apuesta más dinero cuanto mayor cree que es la ventaja, concentra las apuestas más grandes justo en esas trampas.</p>
+
+  <h3 class="sub">4. Control contra sobreajuste y guía práctica: cuándo apostar, cuándo no y cuánto</h3>
+  <p>Elegir un umbral mirando todo el período junto puede sobreajustar. Para verificar si el umbral de 65 % se sostiene fuera de muestra,
+  dividimos las 153 series de Pinnacle en dos meses consecutivos: en el <b>Mes 1</b> (15/08–15/09) logra <b>[[ap_m1_roi]]</b> ([[ap_m1_acc]] de acierto),
+  pero en el <b>Mes 2</b> (16/09–15/10) cae a <b>[[ap_m2_roi]]</b> ([[ap_m2_acc]] de acierto) —aun así mejora casi 3 puntos frente a apostar siempre ([[ap_m2_siempre_roi]])—.</p>
+  [[ap_split_tabla]]
+
+  <h3 class="sub">Resultado final interactivo: el modelo calibrado en Pinnacle (arrancando en umbral 65 %)</h3>
+  <p>El mismo simulador de arriba, pero con las probabilidades calibradas (sin balanceo) y filtrado por defecto en el umbral elegido (65 %).
+  Podés mover el control de confianza o activar «Sólo si la cuota tiene valor» para comprobar en vivo cómo cambia la caja acumulada.</p>
+  <div class="controles" id="c-apuesta-cal"></div>
+  <div class="grafico" id="g-apuesta-cal"></div>
+
+  <div class="briefing" style="border-left-color:var(--t);background:linear-gradient(90deg,rgba(240,178,62,.14),rgba(21,27,35,.7))">
+    <p class="rotulo" style="color:var(--t)">Regla práctica derivada de los datos</p>
+    <p style="font-size:21px;line-height:1.45">
+      <b>• Cuándo NO apostar ($0):</b> si la probabilidad calibrada es <b>menor a 65 %</b> (zona moneda al aire) o si la cuota no supera el equilibrio (<code>p × cuota ≤ 1</code>).<br>
+      <b>• Cuándo frenar y revisar:</b> si el valor esperado supera <b>+15 %</b> frente a Pinnacle, revisar el veto de mapas y novedades del plantel (alta probabilidad de selección adversa).<br>
+      <b>• Cuándo evaluar apostar y cuánto:</b> con confianza calibrada <b>≥ 65 %</b> y ventaja moderada (<code>0 % &lt; EV ≤ 15 %</code>), usar <b>apuesta fija pequeña</b> (1–2 % de la banca) o <b>Kelly fraccionado acotado</b> (<code>0,25 × (p·cuota − 1)/(cuota − 1)</code>, tope 5 %), sabiendo que sin incorporar el veto de mapas no hay garantía de rentabilidad sostenida mes a mes.
+    </p>
+  </div>
+
+  <details><summary>Cómo lo sabemos <small>fuente de cuotas pre-partido, fórmulas de calibración y referencia de la casa</small></summary>
+  <p><b>Las cuotas pre-partido.</b> Se descargaron desde OddsPapi (<code>/v4/historical-odds</code>, casa <b>Pinnacle</b>, mercado ganador de serie <code>marketId = 171</code>)
+  tomando la última cotización activa <i>estrictamente anterior</i> a la hora de inicio UTC de cada serie. El archivo queda en <code>datos/[[ap_archivo]]</code>.
+  A diferencia de Bo3.gg (56 % de cuotas ≤ 1,06), acá sólo el [[ap_extrema]] es ≤ 1,06 y el margen implícito mediano es [[ap_margen]].</p>
+  <p><b>Calibración sin fuga.</b> Las cuatro variantes se evaluaron únicamente sobre las 29.705 series de validación temporal (5 folds).
+  Platt Scaling ajustó una curva logística sobre los logits fuera de fold (<code>a = [[ap_platt_a]]</code>, <code>b = [[ap_platt_b]]</code>), confirmando el mismo desplazamiento hacia B;
+  se prefirió la logística sin balanceo por obtener el menor <i>Log-Loss</i> y <i>Brier Score</i> sin añadir una segunda capa de parámetros.</p>
+  <p><b>Referencia del mercado.</b> En las [[ap_n_fav]] series con favorito pre-partido de Pinnacle, el favorito de la casa ganó el [[ap_fav_gana]],
+  y apostarle siempre $100 dejaba [[ap_neto_fav]] ([[ap_roi_fav]]): incluso el mercado pierde su propio margen cuando se apuesta a ciegas.
+  Con el modelo de la Entrega 3, el mejor día fue el [[ap_mejor_dia]] ([[ap_mejor_dia_neto]]) y el peor el [[ap_peor_dia]] ([[ap_peor_dia_neto]]).</p>
   </details>
 </section>
 </main>
