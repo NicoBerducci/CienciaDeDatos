@@ -98,6 +98,26 @@ summary small{font:500 12px/1 var(--texto);letter-spacing:.02em;text-transform:n
 details h4{font:700 18px/1.2 var(--hud);letter-spacing:.05em;text-transform:uppercase;color:#fff;margin:22px 0 6px}
 details p,details li{font-size:15.5px;color:#c9d2dd}
 .tabla{overflow-x:auto;margin:8px 0 14px}
+/* ---------- El juego ---------- */
+.def{border-bottom:1px dotted var(--acento);cursor:help}
+.tarjetas{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin:18px 0}
+.tarjeta{background:var(--panel);border:1px solid var(--linea);border-top:3px solid var(--acento);padding:16px 20px 12px}
+.tarjeta h4{margin:0 0 8px;font:700 19px/1.2 var(--hud);letter-spacing:.04em;color:#fff}
+.tarjeta p{font-size:15px;margin:0 0 10px;max-width:none}
+.tarjeta.ct{border-top-color:var(--ct)} .tarjeta.t{border-top-color:var(--t)} .tarjeta.ok{border-top-color:var(--ok)}
+.niveles{display:flex;align-items:stretch;gap:10px;margin:14px 0 10px}
+.nivel{flex:1 1 0;min-width:0;background:#0b0e12;border:1px solid var(--linea);padding:12px 14px}
+.nivel > b{display:block;font:700 15px/1 var(--hud);letter-spacing:.14em;text-transform:uppercase;color:var(--acento);margin-bottom:6px}
+.nivel p{font-size:14px;margin:0;color:#c9d2dd}
+.nivel .cajas{display:flex;gap:4px;margin:8px 0 0}
+.nivel .cajas i{flex:1;height:10px;background:var(--suave);border-radius:2px}
+.nivel .cajas i.g{background:var(--ok)}
+.flecha{align-self:center;font:700 22px var(--hud);color:var(--gris)}
+.tiers{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:10px 0}
+.tiers div{background:#0b0e12;border:1px solid var(--linea);padding:10px 12px;font-size:13.5px;color:#c9d2dd}
+.tiers b{display:block;font:700 22px/1 var(--hud);color:#fff;margin-bottom:4px}
+.tiers small{display:block;color:var(--gris);margin-top:4px}
+@media (max-width:900px){.tarjetas{grid-template-columns:1fr}.tiers{grid-template-columns:1fr 1fr}}
 table{border-collapse:collapse;font-size:14px;background:#0f1318}
 th,td{border:1px solid var(--linea);padding:6px 10px;text-align:left;vertical-align:top;color:#d4dbe4}
 th{background:#1b222c;font:700 13px/1.2 var(--hud);letter-spacing:.08em;text-transform:uppercase;color:var(--gris)}
@@ -181,6 +201,7 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
     <div>¿Quién gana la serie?<small>CS2 · Ciencia de Datos UTN FRM · 5K10 · Grupo 07</small></div></div>
   <nav class="rondas">
     <a href="#portada"><span>00</span>El proyecto</a>
+    <a href="#juego"><span>?</span>El juego</a>
     <a href="#datos"><span>01</span>Los datos</a>
     <a href="#hallazgos"><span>02</span>Hallazgo</a>
     <a href="#modelo"><span>03</span>El modelo</a>
@@ -199,7 +220,7 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <div class="etiqueta"><span class="num">00</span><span class="nombre">El proyecto</span></div>
   <h1>¿Quién gana la serie?</h1>
   <p class="sub-h1">En un enfrentamiento entre dos equipos de Counter-Strike 2, ¿Quién será el vencedor?</p>
-  <p class="lead">Antes de cada serie profesional ya hay números: el Elo de cada equipo, su ranking, cómo viene jugando,
+  <p class="lead">Antes de cada <span class="def" title="Un enfrentamiento completo entre dos equipos: uno, tres o cinco mapas. Ver «El juego».">serie</span> profesional ya hay números: el <span class="def" title="Un puntaje de fuerza que sube al ganar y baja al perder, como en el ajedrez. Ver «El juego».">Elo</span> de cada equipo, su ranking, cómo viene jugando,
   cuántos partidos lleva, si cambió jugadores, cómo le fue contra ese rival. Si el que llega mejor suele ganar,
   esos números tendrían que anticipar el resultado. Los juntamos para [[n]] series y le preguntamos a un modelo.</p>
   <div class="briefing"><p class="rotulo">La idea central</p>
@@ -217,15 +238,95 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   </div>
   <p class="nota">Series profesionales de CS2 registradas en Bo3.gg, del [[desde]] al [[hasta]]. El test son las [[n_test]] series jugadas
   desde el 01/03/2026: el modelo se eligió y se entrenó sin mirarlas. En toda la página, <span style="color:var(--ct)">azul</span> es el equipo A
-  y <span style="color:var(--t)">dorado</span> el equipo B. A es el de menor ID en Bo3.gg: no es local ni favorito.</p>
+  y <span style="color:var(--t)">dorado</span> el equipo B. A es el de menor ID en Bo3.gg: no es local ni favorito.
+  ¿Nunca viste Counter-Strike? La sección siguiente explica todo lo necesario en dos minutos.</p>
+</section>
+
+<section id="juego">
+  <div class="etiqueta"><span class="num">?</span><span class="nombre">El juego en dos minutos</span></div>
+  <h2>Para leer esta página no hace falta haber jugado: alcanza con saber qué es una serie, un tier y el Elo</h2>
+  <div class="tarjetas" style="grid-template-columns:1fr">
+    <div class="tarjeta ct"><h4>¿Qué es Counter-Strike 2?</h4>
+      <p>Un videojuego de disparos por equipos, de la empresa Valve, lanzado en 2023 como sucesor de CS:GO. Juegan <b>dos equipos de cinco jugadores</b>:
+      uno ataca (los <span style="color:var(--t)">terroristas</span>, que intentan plantar una bomba) y el otro defiende
+      (los <span style="color:var(--ct)">antiterroristas</span>, que intentan evitarlo). A mitad de cada mapa los equipos cambian de bando.</p>
+      <p>Es uno de los deportes electrónicos (<i>esports</i>) más grandes del mundo: hay equipos profesionales con sueldo, ligas, torneos con premios
+      millonarios y casas de apuestas que ponen cuotas a cada partido. De ahí salen nuestros datos.</p></div>
+    <div class="tarjeta t"><h4>Ronda, mapa y serie</h4>
+      <p>El partido se arma en tres capas, de la más chica a la más grande:</p>
+      <div class="niveles">
+        <div class="nivel"><b>Ronda</b><p>Dura un par de minutos. La gana el bando que cumple su objetivo o elimina a los cinco rivales.</p></div>
+        <div class="flecha">→</div>
+        <div class="nivel"><b>Mapa</b><p>Un escenario. Gana el primero que llega a <b>13 rondas</b> (si empatan 12 a 12, hay tiempo extra).</p></div>
+        <div class="flecha">→</div>
+        <div class="nivel"><b>Serie</b><p>El enfrentamiento completo. Lo que predecimos: <b>quién gana la serie</b>.</p>
+          <div class="cajas"><i class="g"></i><i></i><i class="g"></i></div></div>
+      </div>
+      <p><b>BO1, BO3 y BO5</b> (del inglés <i>best of</i>, «al mejor de») dicen cuántos mapas tiene la serie: un BO1 se decide en un solo mapa;
+      un BO3 lo gana el primero en ganar dos mapas (el dibujo de arriba: 2 a 1); un BO5, el primero en ganar tres.
+      En nuestros datos, el [[pct_bo3]] de las series son BO3 y el [[pct_bo1]] son BO1.</p></div>
+  </div>
+  <div class="tarjeta ok"><h4>¿Qué es un tier?</h4>
+    <p>El <b>nivel del torneo</b> donde se juega la serie, según la clasificación de Bo3.gg. No es una nota del equipo: un mismo equipo puede jugar
+    un torneo de tier B un mes y uno de tier S al siguiente. Cuanto más alto el tier, mejores equipos, más premio y más público.</p>
+    <div class="tiers">[[tiers_html]]</div>
+    <p class="nota" style="margin:4px 0 0">Los ejemplos son los torneos con más series de cada tier en nuestros datos. El porcentaje es la parte del total de series.</p></div>
+  <div class="tarjetas">
+    <div class="tarjeta"><h4>¿Qué es el Elo?</h4>
+      <p>Un puntaje de fuerza inventado por Arpad Elo para el <b>ajedrez</b>, que se usa para ordenar a los jugadores (para ser gran maestro hay que haber llegado a 2.500 puntos).
+      Lo calculamos igual para cada equipo de CS2: todos empiezan con <b>1.500</b>; después de cada serie, el ganador le saca puntos al perdedor.
+      Cuántos, depende de cuán esperable era el resultado: ganarle a uno más fuerte da muchos puntos, ganarle a uno más débil da pocos.</p>
+      <p><b>Ejemplo:</b> un equipo con [[elo_ej_a]] juega contra uno con [[elo_ej_b]]. Con esa diferencia, el sistema espera que el de más Elo gane el [[elo_ej_p]] de las veces.
+      Si gana, suma [[elo_ej_gana]] puntos (era lo esperado); si pierde, resta [[elo_ej_pierde]] (fue una sorpresa) y el otro los suma.</p></div>
+    <div class="tarjeta"><h4>Ventaja de Elo, y los equipos A y B</h4>
+      <p>A cada serie la miramos siempre desde el <b>equipo A</b>. La <b>ventaja de Elo de A</b> (<code>elo_advantage_a</code>) es el Elo de A menos el de B
+      antes de empezar: si da +200, A llega 200 puntos más fuerte; si da −200, el más fuerte es B. Lo mismo vale para las demás «ventajas»: siempre A menos B.</p>
+      <p>¿Quién es A? Simplemente el equipo con el número de identificación más chico en Bo3.gg (más o menos, el que se registró antes en el sitio).
+      No es el local ni el favorito. Igual, como los equipos más viejos suelen estar más asentados, A gana el [[pct_gana_a]] de las series:
+      por eso un modelo que dice siempre «gana A» ya acierta más de la mitad.</p></div>
+  </div>
+  <details><summary>Glosario <small>las 18 cosas que mira el modelo y las palabras de ciencia de datos</small></summary>
+    <h4>Lo que el modelo sabe de cada serie antes de que empiece</h4>
+    <div class="tabla"><table><thead><tr><th>Dato</th><th>Qué significa</th></tr></thead><tbody>
+      <tr><td>Formato y tier</td><td>Si la serie es BO1, BO3 o BO5, y el nivel del torneo.</td></tr>
+      <tr><td>Ventaja de Elo</td><td>Elo de A menos Elo de B (ver arriba). Es el dato que más pesa.</td></tr>
+      <tr><td>Ventaja de ranking</td><td>Diferencia de puntaje en el último ranking oficial de equipos publicado antes de la serie. Los equipos chicos no tienen: queda como dato faltante.</td></tr>
+      <tr><td>% de rondas ganadas (últimas 20 series)</td><td>De todas las rondas que jugó cada equipo en sus últimas 20 series, qué parte ganó. Diferencia A − B.</td></tr>
+      <tr><td>Forma (últimas 5)</td><td>Qué parte de sus últimas 5 series ganó cada equipo. Diferencia A − B.</td></tr>
+      <tr><td>Tendencia</td><td>Si viene mejorando: victorias de las últimas 5 menos las de las 5 anteriores. Una para A y otra para B.</td></tr>
+      <tr><td>% de victorias en el mismo formato y en el mismo tier</td><td>Cómo le fue a cada equipo, en sus últimas 20 series, en series del mismo formato (por ejemplo, BO1) y del mismo nivel de torneo. Diferencia A − B.</td></tr>
+      <tr><td>Estabilidad de la alineación</td><td>Qué parte de los jugadores se repite entre las últimas series: 1 es «los mismos cinco de siempre», menos es que cambió jugadores.</td></tr>
+      <tr><td>Cruce directo (H2H)</td><td>Qué parte de los últimos 5 enfrentamientos entre estos dos equipos ganó A.</td></tr>
+      <tr><td>Partidos previos</td><td>Cuántas series profesionales jugó cada equipo antes de esta: su experiencia.</td></tr>
+      <tr><td>Actividad (7 y 30 días)</td><td>Cuántas series jugó cada equipo en la última semana y en el último mes.</td></tr>
+    </tbody></table></div>
+    <h4>Palabras de ciencia de datos</h4>
+    <div class="tabla"><table><tbody>
+      <tr><td><b>Modelo</b></td><td>Una fórmula que, con los datos de una serie, calcula la probabilidad de que gane A. La nuestra es una <b>regresión logística</b>: suma los datos con distintos pesos y convierte el resultado en un número entre 0 y 100 %.</td></tr>
+      <tr><td><b>Entrenamiento</b></td><td>Las series con las que el modelo aprende los pesos. Son todas anteriores al 01/03/2026.</td></tr>
+      <tr><td><b>Prueba (test)</b></td><td>Las series que apartamos al principio y el modelo nunca vio: con ellas medimos si de verdad predice. Son todas posteriores al 01/03/2026.</td></tr>
+      <tr><td><b>Validación cruzada</b></td><td>Una forma de elegir el modelo sin tocar la prueba: dentro del entrenamiento se entrena con el pasado y se mide con los meses siguientes, cinco veces.</td></tr>
+      <tr><td><b>Accuracy (acierto)</b></td><td>Cuántas series de cada 100 acierta el modelo.</td></tr>
+      <tr><td><b>Modelo tonto (dummy)</b></td><td>Uno que contesta siempre lo mismo sin mirar los datos («gana A» o «gana B»). Es la vara mínima que hay que superar.</td></tr>
+      <tr><td><b>Calibración</b></td><td>Que las probabilidades digan la verdad: de las veces que el modelo dice 70 %, el equipo gana más o menos 7 de cada 10.</td></tr>
+      <tr><td><b>Matriz de confusión</b></td><td>Una tabla de 2 × 2 que cruza lo que dijo el modelo con lo que pasó: muestra cuántos aciertos y cuántos errores de cada tipo hubo.</td></tr>
+      <tr><td><b>Sorpresa</b></td><td>Una serie que gana el equipo que llegaba con menos Elo.</td></tr>
+      <tr><td><b>Cuota</b></td><td>Lo que paga una casa de apuestas por cada $1 apostado si acertás: con cuota 1,84, apostando $100 cobrás $184.</td></tr>
+      <tr><td><b>Valor esperado</b></td><td>Cuánto se gana o se pierde en promedio por cada $1, si la probabilidad del modelo fuera cierta: probabilidad × cuota − 1.</td></tr>
+      <tr><td><b>Kelly</b></td><td>Una regla para decidir qué parte de la plata disponible apostar cuando hay valor esperado positivo. Supone que la probabilidad es exacta, así que en la práctica se usa la mitad o menos.</td></tr>
+    </tbody></table></div>
+  </details>
 </section>
 
 <section id="datos">
   <div class="etiqueta"><span class="num">Mapa 1/3</span><span class="nombre">Los datos</span></div>
   <h2>[[t_datos]]</h2>
-  <p>Cada fila es una serie completa —al mejor de 1, 3 o 5 mapas— con las estadísticas que tenía cada equipo
-  <b>antes</b> de empezarla. El volumen es parejo a lo largo de los tres años, así que el test (a la derecha de la línea roja)
-  se parece al entrenamiento: misma mezcla de tiers y de formatos.</p>
+  <p>Juntamos todas las series profesionales de CS2 que registró Bo3.gg en tres años, cada una con las estadísticas que tenía cada equipo
+  <b>antes</b> de empezarla y con el resultado. Las partimos en dos por fecha: con las de <b>entrenamiento</b> el modelo aprende; las de <b>prueba</b>
+  las guardamos sin mirarlas y al final le pedimos que las prediga, como si fueran series del futuro. Así medimos si de verdad predice o solo memorizó.</p>
+  <p><b>Cómo leer el gráfico:</b> el eje horizontal es el tiempo, mes por mes (de [[desde_mes]] a [[hasta_mes]]); el vertical, cuántas series se jugaron ese mes.
+  Cada barra está pintada por tier: el blanco, en la base, es la élite (tier S) y los tonos más oscuros, los torneos más chicos. La zona de la izquierda es el entrenamiento
+  y la de la derecha, la prueba. El volumen es parejo, así que la prueba se parece al entrenamiento: misma mezcla de tiers y de formatos.</p>
   <div class="grafico" id="g-datos"></div>
   <p class="mirar"><b>Qué mirar</b> Casi todo está en los tonos del medio (tiers B y C). Un modelo que sirva tiene que funcionar ahí, no sólo en los torneos que se ven por stream.</p>
   <details><summary>Cómo lo sabemos <small>pipeline, filas y columnas descartadas</small></summary>
@@ -257,8 +358,9 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
 <section id="hallazgos">
   <div class="etiqueta"><span class="num">Mapa 2/3</span><span class="nombre">Lo que encontramos</span></div>
   <h2>[[t_hallazgo]]</h2>
-  <p>El Elo es un puntaje que sube cuando un equipo gana y baja cuando pierde, más cuanto más fuerte era el rival.
-  Ordenando las series por cuánto Elo de ventaja tenía el favorito, la relación es casi una escalera:
+  <p>El Elo es el puntaje de fuerza del ajedrez (ver «El juego»): sube cuando un equipo gana y baja cuando pierde, más cuanto más fuerte era el rival.
+  Llamamos <b>favorito</b> al equipo que llega con más Elo. Cada barra junta las series según cuántos puntos de ventaja tenía el favorito
+  y su altura dice qué parte de ellas ganó. La relación es casi una escalera:
   con cada tramo de ventaja, el favorito gana entre 5 y 8 series más de cada 100.</p>
   <div class="grafico" id="g-hallazgo"></div>
   <p class="mirar"><b>Qué mirar</b> A la izquierda, donde hay más series (casi 4 de cada 10 tienen menos de 50 puntos de diferencia), el favorito apenas le gana a una moneda.

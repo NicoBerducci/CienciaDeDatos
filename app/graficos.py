@@ -75,29 +75,46 @@ def tabla_meses(df):
 
 
 def g_datos(df):
-    """Series por mes, apiladas por tier, con el corte del test marcado."""
+    """Series por mes, apiladas por tier, con el entrenamiento y la prueba marcados como dos zonas."""
     t = tabla_meses(df)
+    corte = cm.CORTE_TEST.tz_convert(None)
+    inicio = t.mes.min() - pd.Timedelta(days=16)
+    fin = t.mes.max() + pd.Timedelta(days=46)
+    tr, te, _ = cm.separar(df)
+    n_train, n_test = len(tr), len(te)
+    zonas = pd.DataFrame({'x': [inicio, corte], 'x2': [corte, fin],
+                          'zona': ['Entrenamiento', 'Prueba'],
+                          't1': ['ENTRENAMIENTO', 'PRUEBA'],
+                          't2': [f'el modelo aprende de estas {num(n_train)} series',
+                                 f'{num(n_test)} series que el modelo nunca vio']})
+    fondo = alt.Chart(zonas).mark_rect(opacity=0.09).encode(
+        x=alt.X('x:T'), x2='x2:T',
+        color=alt.Color('zona:N', scale=alt.Scale(domain=['Entrenamiento', 'Prueba'], range=[ACENTO, COLOR_ERR]), legend=None))
+    rot1 = alt.Chart(zonas).mark_text(align='left', dx=8, y=14, fontSize=13, fontWeight='bold', font=FUENTE_HUD).encode(
+        x='x:T', text='t1:N',
+        color=alt.Color('zona:N', scale=alt.Scale(domain=['Entrenamiento', 'Prueba'], range=[ACENTO, COLOR_ERR]), legend=None))
+    rot2 = alt.Chart(zonas).mark_text(align='left', dx=8, y=30, fontSize=11.5, color=GRIS).encode(x='x:T', text='t2:N')
     base = alt.Chart(t)
     barras = base.mark_bar().encode(
-        x=alt.X('yearmonth(mes):T', title=None, axis=alt.Axis(format='%b %Y', labelAngle=0, tickCount=7)),
-        y=alt.Y('sum(series):Q', title='Series por mes'),
-        color=alt.Color('tier_n:N', title='Tier del torneo', scale=ESC_TIER, sort=TIER_ORDEN,
+        x=alt.X('yearmonth(mes):T', title='Mes y año en que se jugó la serie',
+                scale=alt.Scale(domain=[inicio.isoformat(), fin.isoformat()]),
+                axis=alt.Axis(format='%b %Y', labelAngle=0, tickCount=7)),
+        y=alt.Y('sum(series):Q', title='Cantidad de series jugadas en el mes', scale=alt.Scale(domainMax=float(t.groupby('mes').series.sum().max() * 1.22))),
+        color=alt.Color('tier_n:N', title='Tier (nivel) del torneo', scale=ESC_TIER, sort=TIER_ORDEN,
                         legend=alt.Legend(orient='top', direction='horizontal')),
         order=alt.Order('orden:Q'),
         tooltip=[alt.Tooltip('yearmonth(mes):T', title='Mes', format='%B %Y'),
                  alt.Tooltip('tier_n:N', title='Tier'), alt.Tooltip('series:Q', title='Series', format=',')],
     ).transform_calculate(orden=f"indexof({TIER_ORDEN}, datum.tier_n)")
-    corte = pd.DataFrame({'mes': [cm.CORTE_TEST.tz_convert(None)], 't': ['empieza el test →']})
-    regla = alt.Chart(corte).mark_rule(color=COLOR_ERR, strokeDash=[5, 3], strokeWidth=2).encode(x='mes:T')
-    texto = alt.Chart(corte).mark_text(align='left', dx=6, dy=-4, color=COLOR_ERR, fontSize=13).encode(
-        x='mes:T', y=alt.value(8), text='t:N')
+    regla = alt.Chart(pd.DataFrame({'mes': [corte]})).mark_rule(color=COLOR_ERR, strokeDash=[5, 3], strokeWidth=2).encode(x='mes:T')
     n = len(df)
     fuera = df.tier.isin(['b', 'c']).mean()
-    return (barras + regla + texto).properties(width=680, height=280, title=alt.Title(
-        f'{num(n)} series en tres años, y {round(10 * fuera)} de cada 10 se juegan en tiers B y C',
-        subtitle=[f'Cada barra es un mes; el color, el nivel del torneo según Bo3.gg. La élite (S) y el tier A '
-                  f'suman el {pct(df.tier.isin(["s", "a"]).mean())}.',
-                  'Todo lo anterior a la línea roja es entrenamiento; lo posterior, el test que el modelo nunca vio.']))
+    return alt.layer(fondo, barras, regla, rot1, rot2).resolve_scale(color='independent').properties(
+        width=680, height=300, title=alt.Title(
+            f'{num(n)} series en tres años, y {round(10 * fuera)} de cada 10 se juegan en tiers B y C',
+            subtitle=[f'Cada barra es un mes y su altura, cuántas series profesionales se jugaron; los colores dicen en qué tier (nivel de torneo).',
+                      f'La élite (S) y el tier A suman el {pct(df.tier.isin(["s", "a"]).mean())}. '
+                      f'La línea roja ({cm.CORTE_TEST:%d/%m/%Y}) separa las series de entrenamiento de las de prueba.']))
 
 
 # ---------------------------------------------------------------------------

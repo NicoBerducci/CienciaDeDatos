@@ -540,6 +540,37 @@ def resumen_apuesta(b):
             'por_bo': a.groupby('bo_type').agg(n=('resultado', 'size'), neto=('resultado', 'sum'), acierto=('acierto', 'mean'))}
 
 
+MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+DESCRIPCION_TIER = {'s': 'La élite: los torneos más importantes del mundo, con los mejores equipos y los premios más grandes.',
+                    'a': 'Torneos internacionales grandes, un escalón abajo, y clasificatorios para los Majors.',
+                    'b': 'La segunda división: ligas regionales y circuitos de equipos que pelean por subir.',
+                    'c': 'Ligas y copas menores, muchas online, con equipos semiprofesionales.',
+                    'd': 'Torneos locales y abiertos: casi no aparecen en los datos.'}
+
+
+def textos_juego(df, k=32, inicial=1500):
+    """Los números de «El juego»: formatos, tiers con ejemplos reales y un ejemplo de Elo con la fórmula del DAG."""
+    bo = df.bo_type.value_counts(normalize=True)
+    tarjetas = []
+    for t in g.TIERS:
+        d = df[df.tier == t]
+        ej = d.tournament_name.str.strip().value_counts().index[:2].tolist()
+        tarjetas.append(f'<div><b>{t.upper()}</b>{DESCRIPCION_TIER[t]}<small>{pct(len(d) / len(df))} de las series · '
+                        f'p. ej. {html_esc(ej[0])}{" y " + html_esc(ej[1]) if len(ej) > 1 else ""}</small></div>')
+    a, b = inicial + 100, inicial
+    esperado = 1 / (1 + 10 ** ((b - a) / 400))
+    m = df.start_at_utc.dt.tz_convert(None)
+    return dict(pct_bo3=pct(bo.get(3, 0), 0), pct_bo1=pct(bo.get(1, 0), 0), tiers_html=''.join(tarjetas),
+                pct_gana_a=pct(df.target_team_a_won.mean()),
+                elo_ej_a=num(a), elo_ej_b=num(b), elo_ej_p=pct(esperado, 0),
+                elo_ej_gana=f'{k * (1 - esperado):.1f}'.replace('.', ','), elo_ej_pierde=f'{k * esperado:.1f}'.replace('.', ','),
+                desde_mes=f'{MESES[m.min().month - 1]} de {m.min().year}', hasta_mes=f'{MESES[m.max().month - 1]} de {m.max().year}')
+
+
+def html_esc(x):
+    return str(x).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
 def plata(x, signo=False):
     s = num(abs(x))
     return (('+' if x >= 0 else '−') if signo else ('−' if x < 0 else '')) + '$' + s
@@ -939,6 +970,7 @@ def main():
         extraccion=EXTRACCION, publicada=PUBLICADA,
         acc_val_oof=pct(acc_val_oof), n_ex=num(len(ex)), piso_test_num=float(piso_test),
         **textos_apuesta(ra, ap_desde, ap_hasta, rc),
+        **textos_juego(df),
     )
     html = pagina(ctx, specs, rangos, equipos, cruces, tabla_pasos, tabla_comp, tabla_grillas, tabla_ajuste,
                   tabla_tipos, tabla_coefs, tabla_folds_html, alta, detalle)
