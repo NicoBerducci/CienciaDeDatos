@@ -408,19 +408,11 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <p class="mirar"><b>Qué mirar</b> El modelo acierta [[mas_que_piso]] series más de cada 100 que el mejor de los tontos, y en validación la ventaja era parecida, así que no es suerte del período de prueba.
   Y lo hace sabiendo muy poco: no sabe qué mapas se van a jugar (cada equipo elige y descarta mapas justo antes de empezar), ni si un jugador está enfermo,
   ni si hubo un cambio de último momento, ni cómo se juega cada ronda. Con solo lo que se sabe antes, acertar 2 de cada 3 series es un buen resultado.</p>
-  <h3 class="sub">Dónde acierta y dónde se equivoca: la matriz de confusión</h3>
+  <h3 class="sub">Dónde acierta y dónde se equivoca: la matriz de confusión, recall y precisión</h3>
   <p>La matriz de confusión cruza lo que dijo el modelo (columnas) con lo que pasó (filas), en las [[n_test]] series de prueba. Las casillas
-  <span style="color:var(--ok)">verdes</span> son aciertos y las <span style="color:var(--err)">rojas</span>, errores. Tomando «gana A» como el caso positivo:</p>
-  <ul>
-    <li><b>Verdadero positivo</b> ([[vp]]): dijo «gana A» y ganó A. <b>Verdadero negativo</b> ([[vn]]): dijo «gana B» y ganó B.</li>
-    <li><b>Falso positivo</b> ([[fp]]): dijo «gana A» y ganó B. <b>Falso negativo</b> ([[fn]]): dijo «gana B» y ganó A.</li>
-  </ul>
-  <div class="grafico" id="g-matriz"></div>
-  <p class="mirar"><b>Qué mirar</b> Los modelos tontos aciertan todas las series de un equipo y fallan todas las del otro: una columna llena y otra vacía.
-  El nuestro reparte: de las [[a_test_n]] series que ganó A reconoce el [[rec_a]], y de las [[b_test_n]] que ganó B, el [[rec_b]]. Los dos tipos de error
-  pesan parecido, y para nosotros cuestan lo mismo (equivocarse a favor de A o de B es igual de malo). Cuando dice «gana A» acierta el [[prec_a]]; cuando dice «gana B», el [[prec_b]].</p>
-  <h3 class="sub">Recall y precisión: la misma matriz leída por filas y por columnas</h3>
-  <p>Con la matriz del modelo se pueden hacer dos preguntas distintas, y cada una tiene nombre:</p>
+  <span style="color:var(--ok)">verdes</span> son aciertos y las <span style="color:var(--err)">rojas</span>, errores. Tomando «gana A» como el caso positivo,
+  hay [[vp]] verdaderos positivos (dijo «gana A» y ganó A), [[vn]] verdaderos negativos (dijo «gana B» y ganó B), [[fp]] falsos positivos
+  (dijo «gana A» y ganó B) y [[fn]] falsos negativos (dijo «gana B» y ganó A). Con esa matriz se pueden hacer dos preguntas distintas, y cada una tiene nombre:</p>
   <ul>
     <li><b>Recall (por fila).</b> De las series que <i>ganó</i> A, ¿cuántas reconoció el modelo? Se divide cada casilla por el total de su fila:
     de las [[a_test_n]] que ganó A dijo «gana A» en el [[rec_a]]; de las [[b_test_n]] que ganó B dijo «gana B» en el [[rec_b]].</li>
@@ -528,8 +520,7 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <h2>Elegí dos equipos y mirá a quién elige el modelo, con qué probabilidad y si conviene apostar</h2>
   <p>Los controles se cargan con los números de cada equipo al [[hoy]], como si la serie se jugara hoy, y después podés mover cualquiera.
   La probabilidad la calcula el gráfico con la fórmula de la logística entrenada —los mismos coeficientes que el notebook—: nada se reentrena.
-  Los controles van del mínimo al máximo que vio el entrenamiento, así que no se puede cargar algo que el modelo nunca vio;
-  si un valor cae en el 1 % más extremo, el gráfico avisa.</p>
+  Los controles van del mínimo al máximo que vio el entrenamiento, así que no se puede cargar algo que el modelo nunca vio.</p>
   <div class="pickem">
     <div class="lado ct" id="lado1"><label for="eq1">Equipo 1</label><select id="eq1"><option value="">— Elegí un equipo —</option>[[opciones]]</select><div class="rol" id="rol1"></div></div>
     <div class="vs">VS</div>
@@ -602,11 +593,11 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <p class="nota">La regla también está en el Pick'em: para cada cruce dice si conviene apostar y desde qué cuota.</p>
 
   <details><summary>Cómo lo sabemos <small>las cuotas, la regla y sus límites</small></summary>
-  <p><b>Las cuotas.</b> Salen de OddsPapi (<code>/v4/historical-odds</code>, casa <b>Pinnacle</b>, mercado de ganador de la serie) y quedan en
-  <code>datos/[[ap_archivo]]</code>. Cada serie del test se empareja con el partido de OddsPapi por fecha y por el nombre de los equipos.
+  <p><b>Las cuotas.</b> Son las de la casa <b>Pinnacle</b> para el ganador de la serie, tomadas del historial de cuotas que publica OddsPapi.
+  Cada serie del test se empareja con su partido en OddsPapi por fecha y por el nombre de los equipos.
   La cuota es la última activa antes del inicio; como hora de inicio usamos la más temprana entre OddsPapi y Bo3.gg, porque en algunas series
   OddsPapi tenía un horario más tarde que el real y la cuota de ese momento ya era del partido en vivo.</p>
-  <p><b>Las predicciones.</b> Son las del modelo final de la Entrega 3 (regresión logística con <code>class_weight = "balanced"</code>, umbral 0,50),
+  <p><b>Las predicciones.</b> Son las del modelo final de la Entrega 3 (la regresión logística que les da el mismo peso a las victorias de A y de B, con umbral 0,50),
   entrenado solo con series anteriores al 01/03/2026. No se reentrena ni se ajusta nada para apostar: la regla solo decide en cuáles de sus
   pronósticos poner plata.</p>
   <p><b>Valor esperado.</b> Si el modelo le da probabilidad <i>p</i> a un equipo y la casa paga <i>c</i>, apostando $1 se espera ganar <i>p × c − 1</i>
@@ -640,7 +631,6 @@ function ajustar(p, x, avisos, quien) {
   const r = RANGOS[p];
   let v = +(Math.round(x / r.paso) * r.paso).toFixed(4);
   if (v < r.min || v > r.max) {
-    avisos.push(`${r.etiqueta}: ${quien} da ${v.toLocaleString("es-AR")}, fuera de lo que vio el modelo; se usa ${(v < r.min ? r.min : r.max).toLocaleString("es-AR")}.`);
     v = Math.min(Math.max(v, r.min), r.max);
   }
   return v;

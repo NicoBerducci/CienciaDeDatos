@@ -414,9 +414,6 @@ def g_proba(f, train, equipo_ejemplo, regla=None):
         options=cm_tiers(train), labels=[g.TIER_NOMBRE[t] for t in cm_tiers(train)], name='Tier ', element='#d-contexto')))
     params += [alt.param(name='nombre_a', value='Equipo A'), alt.param(name='nombre_b', value='Equipo B')]
     params += [alt.param(name='z', expr=z_vega(f)), alt.param(name='pA', expr='1 / (1 + exp(-z))')]
-    rara = ' || '.join((f"(!sd_{p} && " if r['sin_dato'] else "(") + f"({p} < {r['p01']!r} || {p} > {r['p99']!r}))"
-                       for p, r in rangos.items())
-    params.append(alt.param(name='raro', expr=f"({rara})"))
 
     lados = pd.DataFrame({'lado': ['A', 'B']})
     base = alt.Chart(lados).transform_calculate(
@@ -436,31 +433,24 @@ def g_proba(f, train, equipo_ejemplo, regla=None):
     cabeza = alt.Chart(pd.DataFrame({'x': [0]})).mark_text(align='left', fontSize=17, fontWeight='bold', color=g.TINTA,
                                                           text=alt.expr("'El modelo dice: ' + (pA >= 0.5 ? nombre_a : nombre_b)")
                                                           ).encode(x=alt.value(0), y=alt.value(8)).properties(width=330, height=18)
-    aviso = alt.Chart(pd.DataFrame({'x': [0]})).mark_text(
-        align='left', fontSize=12.5, color=g.COLOR_ERR, text=alt.expr(
-            "raro ? '⚠ Algún valor está en el 1 % más extremo del entrenamiento: el modelo casi no vio casos así.' : ''")
-    ).encode(x=alt.value(0), y=alt.value(6)).properties(width=330, height=14)
-
     # La regla de «La apuesta», calculada sola: si la confianza alcanza, desde qué cuota conviene apostar.
     if regla is None:
-        texto_reg = "'Según la regla de «La apuesta»: no apostar.\\nEn marzo–julio ninguna regla le ganó a la casa.'"
+        texto_reg = "'Nota: según la regla de la sección «La apuesta»,\\nen este cruce no conviene apostar.'"
     else:
         tau, m = regla
-        piso_cuota = "1" if m is None else f"{1 + m} / conf"
-        desde = ("' a cualquier cuota'" if m is None else
-                 "' solo si la casa paga ' + replace(format(" + piso_cuota + ", '.2f'), '.', ',') + ' o más'")
+        desde = ("''" if m is None else
+                 "' si la casa paga ' + replace(format(" + f"{1 + m} / conf" + ", '.2f'), '.', ',') + ' o más'")
         texto_reg = (
             "conf >= " + repr(tau) + " - 1e-9 ? "
-            "'Según la regla de «La apuesta»: apostá $100 a ' + favorito + '\\n' + " + desde + " : "
-            "'Según la regla de «La apuesta»: no apostar.\\nEl modelo le da ' + format(conf * 100, '.0f') + "
-            "' % a ' + favorito + ';\\nla regla pide " + ap.pct(tau, 0) + " o más.'")
+            "'Nota: según la regla de la sección «La apuesta»,\\nconvendría apostarle a ' + favorito + " + desde + " + '.' : "
+            "'Nota: según la regla de la sección «La apuesta»,\\nacá no conviene apostar (la confianza no llega a " + ap.pct(tau, 0) + ").'")
     params += [alt.param(name='conf', expr='max(pA, 1 - pA)'),
                alt.param(name='favorito', expr='pA >= 0.5 ? nombre_a : nombre_b')]
     veredicto = alt.Chart(pd.DataFrame({'x': [0]})).mark_text(
-        align='left', baseline='top', fontSize=14, fontWeight='bold', lineBreak='\n', lineHeight=20, text=alt.expr(texto_reg)
-    ).encode(x=alt.value(0), y=alt.value(0), color=alt.value(g.TINTA)).properties(width=330, height=64)
+        align='left', baseline='top', fontSize=12, lineBreak='\n', lineHeight=16, limit=340, text=alt.expr(texto_reg)
+    ).encode(x=alt.value(0), y=alt.value(0), color=alt.value(g.GRIS)).properties(width=330, height=34)
 
-    graf = alt.vconcat(cabeza, barras, aviso, veredicto, spacing=10).add_params(*params).resolve_scale(color='independent')
+    graf = alt.vconcat(cabeza, barras, veredicto, spacing=22).add_params(*params).resolve_scale(color='independent')
     return graf.configure_view(stroke=None), rangos
 
 
@@ -603,18 +593,16 @@ def main():
     acc_tonto = tontos.set_index(['modelo', 'periodo']).accuracy
     assert abs(acc_tonto['A', 'Prueba'] - piso_test) < 1e-12 and abs(acc_tonto['A', 'Validación cruzada'] - comp.loc['piso', 'accuracy']) < 1e-12
     real = detalle.real.to_numpy()
-    matrices = [('Siempre «gana A»', g.tabla_matriz(real, np.ones_like(real))),
-                ('Nuestro modelo', g.tabla_matriz(real, detalle.predicho.to_numpy())),
-                ('Siempre «gana B»', g.tabla_matriz(real, np.zeros_like(real)))]
-    mm = matrices[1][1].set_index('nombre').n
-    vp, fn, fp, vn = (int(mm[k]) for k in ['Verdadero positivo', 'Falso negativo', 'Falso positivo', 'Verdadero negativo'])
+    pred = detalle.predicho.to_numpy()
+    vp, fn = int(((real == 1) & (pred == 1)).sum()), int(((real == 1) & (pred == 0)).sum())
+    fp, vn = int(((real == 0) & (pred == 1)).sum()), int(((real == 0) & (pred == 0)).sum())
 
     print('6 · Gráficos y página…')
     equipos, cruces, hoy = foto_de_equipos(df)
     graficos = {
         'g-datos': g.g_datos(df), 'g-hallazgo': g.g_hallazgo(df), 'g-modelos': g.g_modelos(comp),
         'g-confianza': g.g_confianza(detalle), 'g-explora': g_explora(ex),
-        'g-tontos': g.g_tontos(tontos), 'g-matriz': g.g_matriz(matrices),
+        'g-tontos': g.g_tontos(tontos),
         'g-matriz-lecturas': g.g_matriz_lecturas(detalle.real.to_numpy(), detalle.predicho.to_numpy()),
     }
     rc = ap.ruta_cuotas(cm.RAIZ_REPO)
