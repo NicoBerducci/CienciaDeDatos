@@ -21,24 +21,24 @@
     "n_cuota": 153,
     "n_sin": 59,
     "apostado": 15300,
-    "neto": -1049.3,
-    "cobrado": 14250.7,
-    "roi": -0.06858169934640522,
+    "neto": -1362.6000000000001,
+    "cobrado": 13937.400000000001,
+    "roi": -0.08905882352941177,
     "acierto": 0.6209150326797386,
     "equilibrio": 1.6105263157894736,
-    "mediana_acierta": 1.442,
-    "mediana_falla": 1.7269999999999999,
+    "mediana_acierta": 1.436,
+    "mediana_falla": 1.7115,
     "pct_extrema": 0.006535947712418301,
-    "margen_med": 0.0485,
+    "margen_med": 0.0484,
     "pct_preveto": 0.9934640522875817,
-    "fav_casa_gana": 0.6710526315789473,
-    "neto_fav_casa": -304.50000000000006,
+    "fav_casa_gana": 0.6842105263157895,
+    "neto_fav_casa": -39.69999999999993,
     "n_fav_casa": 152,
     "dias": 43,
-    "dias_positivos": 22,
-    "n_valor": 77,
-    "neto_valor": -642.5999999999999,
-    "acierto_valor": 0.5324675324675324
+    "dias_positivos": 21,
+    "n_valor": 75,
+    "neto_valor": -1051.6999999999998,
+    "acierto_valor": 0.52
   },
   "modelos_validacion": {
     "regresión logística": {
@@ -66,5 +66,5 @@
       "accuracy_train": 0.6467477313366483
     }
   },
-  "generado": "2026-11-22T20:20:59"
+  "generado": "2026-11-22T20:30:43"
 }

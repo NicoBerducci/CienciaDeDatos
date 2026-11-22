@@ -833,6 +833,7 @@ def _analisis_calibracion_umbrales(ruta_cuotas_csv):
         ap_m2_roi=froi(s_m2_65['roi']),
         ap_m2_acc=pct(s_m2_65['acc']),
         ap_m2_siempre_roi=froi(s_m2_50['roi']),
+        ap_m2_mejora=f"{100 * (s_m2_65['roi'] - s_m2_50['roi']):.1f}".replace('.', ','),
     )
 
 
@@ -1071,6 +1072,13 @@ def g_calibracion(df_cal):
     )
 
 
+def subtitulo_pico(df_pin):
+    m = df_pin.loc[df_pin.roi.idxmax()]
+    signo = lambda x: '+' if x >= 0 else '−'
+    roi = f'{abs(m.roi) * 100:.1f}'.replace('.', ',')
+    return f"Curva en «U invertida»: pico en {m.tau.replace('≥ ', '')} ({signo(m.roi)}{roi} % / {signo(m.neto)}${num(abs(m.neto))})"
+
+
 def g_umbrales(df_oof, df_pin):
     """Panel izquierdo: Acierto vs Cobertura en validación OOF. Panel derecho: ROI en Pinnacle (U invertida)."""
     base_oof = alt.Chart(df_oof).encode(
@@ -1127,7 +1135,7 @@ def g_umbrales(df_oof, df_pin):
     der = (barras_roi + cero + txt_roi).properties(
         width=410, height=270,
         title=alt.Title('ROI real en Pinnacle (153 series Tier S/A)',
-                        subtitle='Curva en «U invertida»: pico en 65 % (+3,9 % / +$363)',
+                        subtitle=subtitulo_pico(df_pin),
                         anchor='start', fontSize=13, subtitleColor=g.GRIS),
     )
     return alt.hconcat(izq, der).resolve_scale(y='independent')

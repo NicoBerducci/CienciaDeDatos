@@ -560,7 +560,10 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
 
   <p>Para corregir ese problema y medir una simulación realista, descargamos el historial de cuotas <b>estrictamente previas al inicio</b> de
   <b>Pinnacle</b> (vía OddsPapi) para los torneos principales (tiers S y A) de los últimos dos meses del test (<b>[[ap_desde]]</b> al <b>[[ap_hasta]]</b>).
-  De las [[ap_n_mes]] series del período, [[ap_n_cuota]] tenían línea pre-partido disponible (sólo el [[ap_extrema]] presenta cuotas ≤ 1,06, el margen mediano de la casa es [[ap_margen]] y el [[ap_preveto]] ya estaba abierto al menos 2 horas antes, previo al veto de mapas).</p>
+  De las [[ap_n_mes]] series del período, [[ap_n_cuota]] tenían línea pre-partido disponible (sólo el [[ap_extrema]] presenta cuotas ≤ 1,06, el margen mediano de la casa es [[ap_margen]] y el [[ap_preveto]] ya estaba abierto al menos 2 horas antes, previo al veto de mapas).
+  La cuota de cada serie es la última que publicó Pinnacle antes de empezar. Como hora de inicio usamos la más temprana entre OddsPapi y Bo3.gg:
+  en 14 series OddsPapi tenía un horario entre 5 y 75 minutos más tarde que el real (Bo3.gg registra el primer mapa entre 0 y 8 minutos después de su horario),
+  y la última cuota antes de ese horario ya era del partido en vivo.</p>
 
   <div class="nums">
     <div class="num" style="border-top-color:var(--err)"><span class="tag">Antes · Bo3.gg en vivo (corregido)</span><span>−24,1 %</span>
@@ -608,7 +611,7 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <h3 class="sub">4. Control contra sobreajuste y guía práctica: cuándo apostar, cuándo no y cuánto</h3>
   <p>Elegir un umbral mirando todo el período junto puede sobreajustar. Para verificar si el umbral de 65 % se sostiene fuera de muestra,
   dividimos las 153 series de Pinnacle en dos meses consecutivos: en el <b>Mes 1</b> (15/08–15/09) logra <b>[[ap_m1_roi]]</b> ([[ap_m1_acc]] de acierto),
-  pero en el <b>Mes 2</b> (16/09–15/10) cae a <b>[[ap_m2_roi]]</b> ([[ap_m2_acc]] de acierto) —aun así mejora casi 3 puntos frente a apostar siempre ([[ap_m2_siempre_roi]])—.</p>
+  pero en el <b>Mes 2</b> (16/09–15/10) cae a <b>[[ap_m2_roi]]</b> ([[ap_m2_acc]] de acierto) —aun así mejora [[ap_m2_mejora]] puntos frente a apostar siempre ([[ap_m2_siempre_roi]])—.</p>
   [[ap_split_tabla]]
 
   <h3 class="sub">Resultado final interactivo: el modelo calibrado en Pinnacle (arrancando en umbral 65 %)</h3>

@@ -292,8 +292,11 @@ def main():
             if not data:
                 continue
 
-            start_utc = pd.to_datetime(fix["startTime"], utc=True)
-            res = extraer_cuotas_prepartido(data, start_utc, debug=(args.debug and idx == 1))
+            # El corte es el inicio más temprano entre OddsPapi y Bo3.gg. En 14 series OddsPapi tenía
+            # un horario 5 a 75 minutos más tarde que el real (Bo3.gg registra el primer mapa entre
+            # 0 y 8 minutos después de su horario), y la última cuota antes de ese horario ya era en vivo.
+            start_utc = min(pd.to_datetime(fix["startTime"], utc=True), row.start_at_utc)
+            res =extraer_cuotas_prepartido(data, start_utc, debug=(args.debug and idx == 1))
             if not res:
                 continue
 
