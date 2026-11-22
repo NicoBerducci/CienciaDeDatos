@@ -438,8 +438,9 @@ def g_proba(f, train, equipo_ejemplo, regla=None):
                                                           ).encode(x=alt.value(0), y=alt.value(8)).properties(width=330, height=18)
     aviso = alt.Chart(pd.DataFrame({'x': [0]})).mark_text(
         align='left', fontSize=12.5, color=g.COLOR_ERR, text=alt.expr(
-            "raro ? '⚠ Algún valor está en el 1 % más extremo del entrenamiento: el modelo casi no vio casos así.' : ''")
-    ).encode(x=alt.value(0), y=alt.value(6)).properties(width=330, height=14)
+            "raro ? '⚠ Algún valor está en el 1 % más extremo del entrenamiento:\\nel modelo casi no vio casos así.' : ''"),
+        lineBreak='\n', lineHeight=16, baseline='top'
+    ).encode(x=alt.value(0), y=alt.value(0)).properties(width=330, height=32)
 
     # La regla de «La apuesta», calculada sola: si la confianza alcanza, desde qué cuota conviene apostar.
     if regla is None:
@@ -603,18 +604,16 @@ def main():
     acc_tonto = tontos.set_index(['modelo', 'periodo']).accuracy
     assert abs(acc_tonto['A', 'Prueba'] - piso_test) < 1e-12 and abs(acc_tonto['A', 'Validación cruzada'] - comp.loc['piso', 'accuracy']) < 1e-12
     real = detalle.real.to_numpy()
-    matrices = [('Siempre «gana A»', g.tabla_matriz(real, np.ones_like(real))),
-                ('Nuestro modelo', g.tabla_matriz(real, detalle.predicho.to_numpy())),
-                ('Siempre «gana B»', g.tabla_matriz(real, np.zeros_like(real)))]
-    mm = matrices[1][1].set_index('nombre').n
-    vp, fn, fp, vn = (int(mm[k]) for k in ['Verdadero positivo', 'Falso negativo', 'Falso positivo', 'Verdadero negativo'])
+    pred = detalle.predicho.to_numpy()
+    vp, fn = int(((real == 1) & (pred == 1)).sum()), int(((real == 1) & (pred == 0)).sum())
+    fp, vn = int(((real == 0) & (pred == 1)).sum()), int(((real == 0) & (pred == 0)).sum())
 
     print('6 · Gráficos y página…')
     equipos, cruces, hoy = foto_de_equipos(df)
     graficos = {
         'g-datos': g.g_datos(df), 'g-hallazgo': g.g_hallazgo(df), 'g-modelos': g.g_modelos(comp),
         'g-confianza': g.g_confianza(detalle), 'g-explora': g_explora(ex),
-        'g-tontos': g.g_tontos(tontos), 'g-matriz': g.g_matriz(matrices),
+        'g-tontos': g.g_tontos(tontos),
         'g-matriz-lecturas': g.g_matriz_lecturas(detalle.real.to_numpy(), detalle.predicho.to_numpy()),
     }
     rc = ap.ruta_cuotas(cm.RAIZ_REPO)

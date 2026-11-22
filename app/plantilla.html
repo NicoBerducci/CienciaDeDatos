@@ -408,19 +408,11 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <p class="mirar"><b>Qué mirar</b> El modelo acierta [[mas_que_piso]] series más de cada 100 que el mejor de los tontos, y en validación la ventaja era parecida, así que no es suerte del período de prueba.
   Y lo hace sabiendo muy poco: no sabe qué mapas se van a jugar (cada equipo elige y descarta mapas justo antes de empezar), ni si un jugador está enfermo,
   ni si hubo un cambio de último momento, ni cómo se juega cada ronda. Con solo lo que se sabe antes, acertar 2 de cada 3 series es un buen resultado.</p>
-  <h3 class="sub">Dónde acierta y dónde se equivoca: la matriz de confusión</h3>
+  <h3 class="sub">Dónde acierta y dónde se equivoca: la matriz de confusión, recall y precisión</h3>
   <p>La matriz de confusión cruza lo que dijo el modelo (columnas) con lo que pasó (filas), en las [[n_test]] series de prueba. Las casillas
-  <span style="color:var(--ok)">verdes</span> son aciertos y las <span style="color:var(--err)">rojas</span>, errores. Tomando «gana A» como el caso positivo:</p>
-  <ul>
-    <li><b>Verdadero positivo</b> ([[vp]]): dijo «gana A» y ganó A. <b>Verdadero negativo</b> ([[vn]]): dijo «gana B» y ganó B.</li>
-    <li><b>Falso positivo</b> ([[fp]]): dijo «gana A» y ganó B. <b>Falso negativo</b> ([[fn]]): dijo «gana B» y ganó A.</li>
-  </ul>
-  <div class="grafico" id="g-matriz"></div>
-  <p class="mirar"><b>Qué mirar</b> Los modelos tontos aciertan todas las series de un equipo y fallan todas las del otro: una columna llena y otra vacía.
-  El nuestro reparte: de las [[a_test_n]] series que ganó A reconoce el [[rec_a]], y de las [[b_test_n]] que ganó B, el [[rec_b]]. Los dos tipos de error
-  pesan parecido, y para nosotros cuestan lo mismo (equivocarse a favor de A o de B es igual de malo). Cuando dice «gana A» acierta el [[prec_a]]; cuando dice «gana B», el [[prec_b]].</p>
-  <h3 class="sub">Recall y precisión: la misma matriz leída por filas y por columnas</h3>
-  <p>Con la matriz del modelo se pueden hacer dos preguntas distintas, y cada una tiene nombre:</p>
+  <span style="color:var(--ok)">verdes</span> son aciertos y las <span style="color:var(--err)">rojas</span>, errores. Tomando «gana A» como el caso positivo,
+  hay [[vp]] verdaderos positivos (dijo «gana A» y ganó A), [[vn]] verdaderos negativos (dijo «gana B» y ganó B), [[fp]] falsos positivos
+  (dijo «gana A» y ganó B) y [[fn]] falsos negativos (dijo «gana B» y ganó A). Con esa matriz se pueden hacer dos preguntas distintas, y cada una tiene nombre:</p>
   <ul>
     <li><b>Recall (por fila).</b> De las series que <i>ganó</i> A, ¿cuántas reconoció el modelo? Se divide cada casilla por el total de su fila:
     de las [[a_test_n]] que ganó A dijo «gana A» en el [[rec_a]]; de las [[b_test_n]] que ganó B dijo «gana B» en el [[rec_b]].</li>
@@ -640,7 +632,6 @@ function ajustar(p, x, avisos, quien) {
   const r = RANGOS[p];
   let v = +(Math.round(x / r.paso) * r.paso).toFixed(4);
   if (v < r.min || v > r.max) {
-    avisos.push(`${r.etiqueta}: ${quien} da ${v.toLocaleString("es-AR")}, fuera de lo que vio el modelo; se usa ${(v < r.min ? r.min : r.max).toLocaleString("es-AR")}.`);
     v = Math.min(Math.max(v, r.min), r.max);
   }
   return v;
