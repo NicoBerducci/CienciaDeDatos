@@ -25,6 +25,7 @@ app/resultados/
 **/__pycache__/
 .ipynb_checkpoints/
 !/datos/cuotas_bo3_*.csv
+!/datos/cuotas_oddspapi_pinnacle_*.csv
 
 #OddsPapi
 datos/oddspapi_cache/
