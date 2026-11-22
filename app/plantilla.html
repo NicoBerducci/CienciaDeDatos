@@ -593,11 +593,11 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <p class="nota">La regla también está en el Pick'em: para cada cruce dice si conviene apostar y desde qué cuota.</p>
 
   <details><summary>Cómo lo sabemos <small>las cuotas, la regla y sus límites</small></summary>
-  <p><b>Las cuotas.</b> Salen de OddsPapi (<code>/v4/historical-odds</code>, casa <b>Pinnacle</b>, mercado de ganador de la serie) y quedan en
-  <code>datos/[[ap_archivo]]</code>. Cada serie del test se empareja con el partido de OddsPapi por fecha y por el nombre de los equipos.
+  <p><b>Las cuotas.</b> Son las de la casa <b>Pinnacle</b> para el ganador de la serie, tomadas del historial de cuotas que publica OddsPapi.
+  Cada serie del test se empareja con su partido en OddsPapi por fecha y por el nombre de los equipos.
   La cuota es la última activa antes del inicio; como hora de inicio usamos la más temprana entre OddsPapi y Bo3.gg, porque en algunas series
   OddsPapi tenía un horario más tarde que el real y la cuota de ese momento ya era del partido en vivo.</p>
-  <p><b>Las predicciones.</b> Son las del modelo final de la Entrega 3 (regresión logística con <code>class_weight = "balanced"</code>, umbral 0,50),
+  <p><b>Las predicciones.</b> Son las del modelo final de la Entrega 3 (la regresión logística que les da el mismo peso a las victorias de A y de B, con umbral 0,50),
   entrenado solo con series anteriores al 01/03/2026. No se reentrena ni se ajusta nada para apostar: la regla solo decide en cuáles de sus
   pronósticos poner plata.</p>
   <p><b>Valor esperado.</b> Si el modelo le da probabilidad <i>p</i> a un equipo y la casa paga <i>c</i>, apostando $1 se espera ganar <i>p × c − 1</i>
