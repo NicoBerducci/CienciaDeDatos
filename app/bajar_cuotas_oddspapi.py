@@ -5,7 +5,7 @@ Guarda caché local en datos/oddspapi_cache/ para no repetir requests.
 
 Uso (desde la raíz del repositorio, con $env:ODDSPAPI_KEY seteada):
     python app/bajar_cuotas_oddspapi.py --limite 1 --debug   # verifica 1 partido (gasta pocos requests)
-    python app/bajar_cuotas_oddspapi.py --limite 200         # descarga hasta 200 partidos Tier S/A
+    python app/bajar_cuotas_oddspapi.py                      # todo el test (01/03 al 15/10/2026), tiers S y A
     python app/bajar_cuotas_oddspapi.py --solo-parsear       # regenera el CSV solo desde la caché local
 """
 import argparse
@@ -244,10 +244,10 @@ def extraer_cuotas_prepartido(data: dict, start_utc: pd.Timestamp, debug: bool =
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--desde", default="2026-08-15", help="Fecha inicial AAAA-MM-DD (default: últimos 2 meses)")
-    ap.add_argument("--hasta", default="2026-10-16", help="Fecha final AAAA-MM-DD")
+    ap.add_argument("--desde", default="2026-03-01", help="Fecha inicial AAAA-MM-DD (default: todo el test)")
+    ap.add_argument("--hasta", default="2026-10-15", help="Fecha final AAAA-MM-DD")
     ap.add_argument("--tiers", default="s,a", help="Tiers a incluir separados por coma (default: s,a)")
-    ap.add_argument("--limite", type=int, default=200, help="Máximo de partidos a pedir a /historical-odds")
+    ap.add_argument("--limite", type=int, default=1000, help="Máximo de partidos a pedir a /historical-odds")
     ap.add_argument("--debug", action="store_true", help="Imprime estructura de markets del primer partido")
     ap.add_argument("--solo-parsear", action="store_true", help="No hace requests; usa solo la caché local")
     args = ap.parse_args()
@@ -292,8 +292,11 @@ def main():
             if not data:
                 continue
 
-            start_utc = pd.to_datetime(fix["startTime"], utc=True)
-            res = extraer_cuotas_prepartido(data, start_utc, debug=(args.debug and idx == 1))
+            # El corte es el inicio más temprano entre OddsPapi y Bo3.gg. En 14 series OddsPapi tenía
+            # un horario 5 a 75 minutos más tarde que el real (Bo3.gg registra el primer mapa entre
+            # 0 y 8 minutos después de su horario), y la última cuota antes de ese horario ya era en vivo.
+            start_utc = min(pd.to_datetime(fix["startTime"], utc=True), row.start_at_utc)
+            res =extraer_cuotas_prepartido(data, start_utc, debug=(args.debug and idx == 1))
             if not res:
                 continue
 

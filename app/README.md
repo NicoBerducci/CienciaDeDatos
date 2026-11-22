@@ -13,7 +13,8 @@
 | `cs2_modelo.py` | Todo lo que decide un número, con la misma configuración del notebook de la Entrega 3: semilla, corte del test, folds temporales, variantes de columnas, pipeline, grillas de las cuatro familias, modelo final, lectura de errores e hipótesis de la Entrega 2. |
 | `graficos.py` | Los gráficos de Altair, con un solo juego de colores (azul CT = equipo A, dorado T = equipo B). |
 | `build_app.py` | La construcción: lee el Silver, entrena el modelo con la misma semilla y genera `docs/index.html`. |
-| `bajar_cuotas.py` | Baja de la API de Bo3.gg las cuotas de Thunderpick de cada serie terminada, día por día, para la sección «La apuesta». |
+| `apuestas.py` | La sección «La apuesta»: une las cuotas con las predicciones del test, prueba las reglas de apuesta, elige la mejor en marzo–julio y la evalúa en agosto–octubre. |
+| `bajar_cuotas_oddspapi.py` | Baja de OddsPapi el historial de cuotas de Pinnacle de las series de tier S y A del test y guarda la última cuota antes del inicio. |
 | `plantilla.html` | El esqueleto de la página: textos, estilos y la lógica del Pick'em. `build_app.py` lo completa con números y gráficos. |
 | `fuentes/` | Rajdhani y Barlow (licencia SIL OFL, incluida), embebidas en la página para que funcione sin conexión. |
 
@@ -36,13 +37,16 @@ python app/build_app.py --cache  # reusa app/resultados/busqueda_v4.pkl si ya ex
 
 ## Las cuotas de la sección «La apuesta»
 
-La sección simula apostar $100 al pronóstico del modelo en cada serie del último mes del dataset (15/09/2026 al 15/10/2026, 1.210 series, todas del test). Las cuotas salen de la misma consulta que usa la página de resultados de Bo3.gg:
+La sección decide **cuándo conviene apostar** siguiendo al modelo final: apostar $100 al equipo elegido solo si la confianza del modelo llega a un mínimo τ y el valor esperado (confianza × cuota − 1) llega a un mínimo m. τ y m se eligen con las series de marzo a julio de 2026 y se prueban con las de agosto a octubre.
 
-```
-https://api.bo3.gg/api/v2/matches/finished?date=AAAA-MM-DD&utc_offset=0&filter[discipline_id][eq]=1
+Las cuotas son las de **Pinnacle**, tomadas del historial de OddsPapi: para cada serie de tier S y A del test, la última cuota publicada antes del inicio (el más temprano entre el horario de OddsPapi y el de Bo3.gg). Quedan en `datos/cuotas_oddspapi_pinnacle_20260301_20261015.csv` y `build_app.py` las lee de ahí. Para volver a bajarlas hace falta una API key de OddsPapi:
+
+```bash
+export ODDSPAPI_KEY=...        # en Windows: $env:ODDSPAPI_KEY="..."
+python app/bajar_cuotas_oddspapi.py --desde 2026-03-01 --hasta 2026-10-15 --limite 1000
 ```
 
-Cada serie trae `bet_updates` con la cuota decimal de cada equipo en Thunderpick (la que la página muestra como «$184 por $100»). Quedan guardadas en `datos/cuotas_bo3_20260914_20261016.csv` (bajadas el 09/11/2026; 1.654 series, 783 del mes del dataset con cuota) y `build_app.py` las lee de ahí. Para volver a bajarlas: `python app/bajar_cuotas.py`. Ojo: Bo3.gg conserva la **última** cuota que publicó la casa, que muchas veces es la del partido en curso; la página lo explica en su «Cómo lo sabemos».
+El script guarda lo que baja en `datos/oddspapi_cache/` (fuera del repo) y con `--solo-parsear` regenera el CSV sin consultar la API.
 
 ## Si cambian los datos
 
