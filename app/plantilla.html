@@ -421,6 +421,19 @@ footer{max-width:1120px;margin:0 auto;padding:30px 28px 50px;color:var(--suave);
   <p class="mirar"><b>Qué mirar</b> Los modelos tontos aciertan todas las series de un equipo y fallan todas las del otro: una columna llena y otra vacía.
   El nuestro reparte: de las [[a_test_n]] series que ganó A reconoce el [[rec_a]], y de las [[b_test_n]] que ganó B, el [[rec_b]]. Los dos tipos de error
   pesan parecido, y para nosotros cuestan lo mismo (equivocarse a favor de A o de B es igual de malo). Cuando dice «gana A» acierta el [[prec_a]]; cuando dice «gana B», el [[prec_b]].</p>
+  <h3 class="sub">Recall y precisión: la misma matriz leída por filas y por columnas</h3>
+  <p>Con la matriz del modelo se pueden hacer dos preguntas distintas, y cada una tiene nombre:</p>
+  <ul>
+    <li><b>Recall (por fila).</b> De las series que <i>ganó</i> A, ¿cuántas reconoció el modelo? Se divide cada casilla por el total de su fila:
+    de las [[a_test_n]] que ganó A dijo «gana A» en el [[rec_a]]; de las [[b_test_n]] que ganó B dijo «gana B» en el [[rec_b]].</li>
+    <li><b>Precisión (por columna).</b> De las veces que el modelo <i>dijo</i> «gana A», ¿cuántas acertó? Se divide cada casilla por el total de su columna:
+    de las [[n_dijo_a]] veces que dijo A acertó el [[prec_a]]; de las [[n_dijo_b]] veces que dijo B acertó el [[prec_b]].</li>
+  </ul>
+  <div class="grafico" id="g-matriz-lecturas"></div>
+  <p class="mirar"><b>Qué mirar</b> Los dos tipos de error son casi la misma cantidad ([[fp]] y [[fn]], [[n_errores_tot]] en total), pero A queda con recall y precisión
+  más altos que B. No es que el modelo «prefiera» a A: A gana más series ([[a_test_n]] contra [[b_test_n]]), así que el mismo número de errores pesa menos
+  sobre un total más grande. Recall y precisión salen casi iguales para cada equipo, y por eso el F1 —el promedio que combina las dos— también:
+  [[f1_a]] para A y [[f1_b]] para B ([[f1_macro]] en promedio).</p>
   <h3 class="sub">[[t_confianza]]</h3>
   <div class="grafico" id="g-confianza"></div>
   <p>El modelo no solo dice quién gana: dice con qué probabilidad. Este gráfico junta las series de prueba según esa probabilidad
