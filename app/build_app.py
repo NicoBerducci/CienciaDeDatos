@@ -1260,6 +1260,7 @@ def main():
         'g-datos': g.g_datos(df), 'g-hallazgo': g.g_hallazgo(df), 'g-modelos': g.g_modelos(comp),
         'g-confianza': g.g_confianza(detalle), 'g-explora': g_explora(ex),
         'g-tontos': g.g_tontos(tontos), 'g-matriz': g.g_matriz(matrices),
+        'g-matriz-lecturas': g.g_matriz_lecturas(detalle.real.to_numpy(), detalle.predicho.to_numpy()),
     }
     gp, rangos = g_proba(f, train, None)
     graficos['g-proba'] = gp
@@ -1427,6 +1428,9 @@ def main():
         mas_que_piso=num(round(100 * (acc_test - piso_test))),
         vp=num(vp), fn=num(fn), fp=num(fp), vn=num(vn),
         rec_a=pct(vp / (vp + fn)), rec_b=pct(vn / (vn + fp)), prec_a=pct(vp / (vp + fp)), prec_b=pct(vn / (vn + fn)),
+        n_dijo_a=num(vp + fp), n_dijo_b=num(vn + fn), n_errores_tot=num(fp + fn),
+        f1_a=f'{2 * vp / (2 * vp + fp + fn):.3f}'.replace('.', ','), f1_b=f'{2 * vn / (2 * vn + fn + fp):.3f}'.replace('.', ','),
+        f1_macro=f'{(vp / (2 * vp + fp + fn) + vn / (2 * vn + fn + fp)):.3f}'.replace('.', ','),
         **textos_calibracion(tc), **textos_juego(df),
     )
     html = pagina(ctx, specs, rangos, equipos, cruces, tabla_pasos, tabla_comp, tabla_grillas, tabla_ajuste,

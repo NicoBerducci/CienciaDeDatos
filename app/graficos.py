@@ -321,3 +321,47 @@ def g_matriz(tablas):
         nom = base.mark_text(fontSize=10.5, dy=11, color=TINTA).encode(x=x, y=y, text='nombre:N')
         paneles.append(alt.layer(celda, n, nom).properties(width=230, height=170, title=alt.Title(titulo, fontSize=14, anchor='middle')))
     return alt.hconcat(*paneles, spacing=18).resolve_scale(color='shared', opacity='shared')
+
+
+def g_matriz_lecturas(real, pred):
+    """La matriz del modelo leída de tres formas, como en el apartado 11.1 del notebook:
+    cantidades, por fila (la diagonal es el recall) y por columna (la diagonal es la precisión)."""
+    reales, preds = ['Ganó A', 'Ganó B'], ['Dijo «gana A»', 'Dijo «gana B»']
+    filas = []
+    for r, nr in [(1, 'Ganó A'), (0, 'Ganó B')]:
+        for p_, npred in [(1, 'Dijo «gana A»'), (0, 'Dijo «gana B»')]:
+            n = int(((real == r) & (pred == p_)).sum())
+            filas.append({'real': nr, 'pred': npred, 'n': n, 'ok': 'Acierto' if r == p_ else 'Error',
+                          'fila': n / int((real == r).sum()), 'col': n / int((pred == p_).sum())})
+    t = pd.DataFrame(filas)
+    t['equipo'] = t.real.str[-1]
+    lecturas = [
+        ('Cantidades', 'n', lambda d: num(d.n),
+         'Series de prueba en cada casilla.'),
+        ('Por fila → recall', 'fila', lambda d: pct(d.fila),
+         'De las que ganó cada equipo, cuántas detectó.'),
+        ('Por columna → precisión', 'col', lambda d: pct(d.col),
+         'De las veces que dijo cada equipo, cuántas acertó.')]
+    paneles = []
+    for i, (titulo, campo, fmt, sub) in enumerate(lecturas):
+        d = t.assign(texto=t.apply(fmt, axis=1),
+                     detalle=t.apply(lambda r: (f'recall de {r.equipo}' if campo == 'fila' else f'precisión de {r.equipo}')
+                                     if (campo != 'n' and r.ok == 'Acierto') else '', axis=1))
+        base = alt.Chart(d)
+        x = alt.X('pred:N', sort=preds, title=None, axis=alt.Axis(orient='top', labelAngle=0, labelFontSize=12))
+        y = alt.Y('real:N', sort=reales, title='Lo que pasó' if i == 0 else None,
+                  axis=alt.Axis(labels=i == 0, ticks=False, labelFontSize=12))
+        intensidad = 'fila' if campo == 'n' else campo
+        celda = base.mark_rect(stroke=FONDO, strokeWidth=3).encode(
+            x=x, y=y, color=alt.Color('ok:N', scale=ESC_RESULTADO, legend=None),
+            opacity=alt.Opacity(f'{intensidad}:Q', scale=alt.Scale(domain=[0, 1], range=[0.15, 0.95]), legend=None),
+            tooltip=[alt.Tooltip('real:N', title='Lo que pasó'), alt.Tooltip('pred:N', title='Lo que dijo el modelo'),
+                     alt.Tooltip('n:Q', title='Series', format=','),
+                     alt.Tooltip('fila:Q', title='Parte de su fila', format='.1%'),
+                     alt.Tooltip('col:Q', title='Parte de su columna', format='.1%')])
+        valor = base.mark_text(fontSize=21, fontWeight='bold', dy=-7, color=TINTA, font=FUENTE_HUD).encode(x=x, y=y, text='texto:N')
+        det = base.mark_text(fontSize=11, dy=13, color=TINTA).encode(x=x, y=y, text='detalle:N')
+        paneles.append(alt.layer(celda, valor, det).properties(
+            width=230, height=170, title=alt.Title(titulo, subtitle=sub, fontSize=15, anchor='middle')))
+    return alt.hconcat(*paneles, spacing=18).resolve_scale(color='shared', opacity='independent').properties(
+        title=alt.Title('Lo que dijo el modelo', anchor='middle', fontSize=13, fontWeight='normal', color=GRIS))
