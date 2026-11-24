@@ -395,8 +395,10 @@ def g_proba(f, train, equipo_ejemplo, regla=None):
     rangos = {}
     for col, (p, etiqueta, grupo, paso) in ENTRADAS.items():
         lo, hi = float(X[col].min()), float(X[col].max())
-        if paso >= 1:
-            lo, hi = math.floor(lo), math.ceil(hi)
+        # Extremos alineados al paso y con dos decimales: si el mínimo tiene más decimales,
+        # el navegador corre el control a mínimo + k·paso y muestra valores como 0,0461955…
+        lo = round(math.floor(round(lo / paso, 6)) * paso, 2)
+        hi = round(math.ceil(round(hi / paso, 6)) * paso, 2)
         mediana = float(X[col].median())
         valor = round(round(mediana / paso) * paso, 4)
         rangos[p] = {'min': lo, 'max': hi, 'paso': paso, 'mediana': valor, 'col': col, 'etiqueta': etiqueta,
